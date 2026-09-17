@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const deckStatusBadge = document.getElementById('deck-status-badge');
   const liveRecDot = document.getElementById('live-rec-dot');
   const vuMeterFill = document.getElementById('vu-meter-fill');
-  const waveformCanvas = document.getElementById('waveformCanvas');
+  const noiseLockBadge = document.getElementById('noise-lock-badge');
 
   // File Upload Elements
   const fileDropZone = document.getElementById('file-drop-zone');
@@ -69,6 +69,21 @@ document.addEventListener('DOMContentLoaded', () => {
   const vaultEmptyState = document.getElementById('vault-empty-state');
   const vaultCardsGrid = document.getElementById('vault-cards-grid');
 
+  // Vault Modal & Header Menu Elements
+  const btnOpenVault = document.getElementById('btn-open-vault');
+  const btnCloseVault = document.getElementById('btn-close-vault');
+  const vaultModalBackdrop = document.getElementById('vault-modal-backdrop');
+  const headerVaultBadge = document.getElementById('header-vault-badge');
+
+  // Background Noise Level Monitor Elements
+  const noiseMonitorCard = document.getElementById('noise-monitor-card');
+  const noiseBadge = document.getElementById('noise-badge');
+  const noiseMeterFill = document.getElementById('noise-meter-fill');
+  const noiseDbText = document.getElementById('noise-db-text');
+  const noiseTrendBox = document.getElementById('noise-trend-box');
+  const noiseTrendText = document.getElementById('noise-trend-text');
+  const noiseAlertBanner = document.getElementById('noise-alert-banner');
+
   const toast = document.getElementById('toast');
   const toastText = document.getElementById('toast-text');
   const toastIcon = document.getElementById('toast-icon');
@@ -80,6 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let audioChunksQueue = [];
   let recSeconds = 0;
   let recTimerInterval = null;
+  let chunkSliceInterval = null;
 
   let audioCtx = null;
   let analyser = null;
@@ -138,10 +154,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initial check on page load
   checkServerHealth();
 
-  // --- AUDIO FFT VISUALIZER & VU METER ---
-  let canvasCtx = waveformCanvas ? waveformCanvas.getContext('2d') : null;
+  // --- REAL-TIME AUDIO MONITOR & BACKGROUND NOISE BLOCKER ---
+  let isNoiseBlocked = false;
+  let noiseHistory = [];
+  let ambientNoiseFloor = 8;
+  let consecutiveIncreasingFrames = 0;
+  let consecutiveHighNoiseFrames = 0;
+  let lastSmoothedLevel = 0;
 
   function initAudioAnalysis(stream) {
+    if (audioCtx && analyser) return;
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContextClass();
@@ -155,59 +177,144 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function drawWaveform() {
-    if (!waveformCanvas || !canvasCtx) return;
+  function updateNoiseMonitor(currentRawAvg) {
+    if (!noiseMeterFill || !noiseBadge) return;
 
-    const width = waveformCanvas.width = waveformCanvas.parentElement.clientWidth;
-    const height = waveformCanvas.height = waveformCanvas.parentElement.clientHeight;
-
-    canvasCtx.clearRect(0, 0, width, height);
-
-    const bufferLength = analyser ? analyser.frequencyBinCount : 32;
-    const dataArray = new Uint8Array(bufferLength);
-
-    if (analyser && isRecording) {
-      analyser.getByteFrequencyData(dataArray);
+    if (!analyser) {
+      noiseMeterFill.style.width = '6%';
+      if (noiseDbText) noiseDbText.textContent = '0 dB (Ready)';
+      if (noiseBadge) {
+        noiseBadge.className = 'noise-badge low';
+        noiseBadge.textContent = 'Quiet (Optimal)';
+      }
+      if (noiseTrendText) noiseTrendText.textContent = 'Environment quiet • Ready to monitor';
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
+      if (noiseMonitorCard) {
+        noiseMonitorCard.classList.remove('high-alert', 'elevated');
+      }
+      return;
     }
+
+    // Smooth the raw input level
+    const smoothed = (lastSmoothedLevel * 0.65) + (currentRawAvg * 0.35);
+    lastSmoothedLevel = smoothed;
+
+    // Track rolling history (last 24 frames)
+    noiseHistory.push(smoothed);
+    if (noiseHistory.length > 24) noiseHistory.shift();
+
+    // Moving average of recent audio volume
+    const historySum = noiseHistory.reduce((a, b) => a + b, 0);
+    const movingAvg = historySum / noiseHistory.length;
+
+    // Adaptive noise floor tracking
+    if (smoothed < ambientNoiseFloor) {
+      ambientNoiseFloor = smoothed;
+    } else {
+      ambientNoiseFloor = (ambientNoiseFloor * 0.995) + (smoothed * 0.005);
+    }
+
+    // Normalized meter fill 0% to 100%
+    const meterPercent = Math.min(100, Math.max(6, Math.round((smoothed / 135) * 100)));
+    noiseMeterFill.style.width = `${meterPercent}%`;
+
+    // Estimated ambient decibels (20 dB quiet room to 95 dB loud noise/voices)
+    const estimatedDb = Math.min(95, Math.max(20, Math.round(20 + (smoothed / 160) * 75)));
+    if (noiseDbText) noiseDbText.textContent = `${estimatedDb} dB`;
+
+    // Detect if background noise or voice is increasing
+    const isRising = smoothed > (movingAvg * 1.25) && smoothed > 30;
+    if (isRising) {
+      consecutiveIncreasingFrames++;
+    } else {
+      consecutiveIncreasingFrames = Math.max(0, consecutiveIncreasingFrames - 1);
+    }
+    const isNoiseIncreasing = consecutiveIncreasingFrames >= 3;
+
+    // Excessive noise threshold (68 dB / 68% meter): Do NOT allow recording
+    const isExcessiveNoise = meterPercent >= 68 || estimatedDb >= 68;
+
+    if (isExcessiveNoise) {
+      consecutiveHighNoiseFrames++;
+    } else {
+      consecutiveHighNoiseFrames = Math.max(0, consecutiveHighNoiseFrames - 1);
+    }
+
+    if (consecutiveHighNoiseFrames >= 3) {
+      // --- RECORDING IS BLOCKED DUE TO HIGH BACKGROUND NOISE ---
+      isNoiseBlocked = true;
+      if (btnToggleMic) btnToggleMic.classList.add('noise-blocked');
+      if (noiseLockBadge) noiseLockBadge.style.display = 'inline-flex';
+      if (deckStatusBadge && !isRecording) deckStatusBadge.textContent = 'NOISE BLOCKED';
+      if (recordHint && !isRecording) recordHint.textContent = 'Speech recording blocked • High background noise';
+
+      noiseBadge.className = 'noise-badge high';
+      noiseBadge.textContent = 'Blocked (Too Loud)';
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'flex';
+      if (noiseMonitorCard) {
+        noiseMonitorCard.classList.add('high-alert');
+        noiseMonitorCard.classList.remove('elevated');
+      }
+      if (noiseTrendText) noiseTrendText.textContent = '🚨 Speech blocked: Ambient noise exceeds 68 dB';
+
+      // If user was actively recording and high noise persists for ~1.5s, auto-stop to prevent garbage transcription
+      if (isRecording && consecutiveHighNoiseFrames >= 12) {
+        stopRecording(true);
+        showToast('⚠️ Recording stopped: Background noise increased too much for speech recognition.', 'error');
+      }
+    } else if (isNoiseBlocked && consecutiveHighNoiseFrames === 0) {
+      // --- NOISE DROPPED: UNBLOCK RECORDING ---
+      isNoiseBlocked = false;
+      if (btnToggleMic) btnToggleMic.classList.remove('noise-blocked');
+      if (noiseLockBadge) noiseLockBadge.style.display = 'none';
+      if (deckStatusBadge && !isRecording) deckStatusBadge.textContent = 'MIC READY';
+      if (recordHint && !isRecording) recordHint.textContent = 'Click microphone to start recording • Speak in Konkani';
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
+      if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert');
+    } else if (isNoiseIncreasing || meterPercent >= 46 || estimatedDb >= 50) {
+      // Moderate / increasing noise warning
+      noiseBadge.className = 'noise-badge medium';
+      noiseBadge.textContent = isNoiseIncreasing ? '⚠️ Noise Increasing' : 'Moderate Noise';
+      if (noiseAlertBanner && !isNoiseBlocked) noiseAlertBanner.style.display = isNoiseIncreasing ? 'flex' : 'none';
+      if (noiseMonitorCard) {
+        noiseMonitorCard.classList.remove('high-alert');
+        noiseMonitorCard.classList.add('elevated');
+      }
+      if (noiseTrendText) {
+        noiseTrendText.textContent = isNoiseIncreasing 
+          ? '⚠️ Background voice or noise is rising!' 
+          : 'Moderate ambient background sound';
+      }
+    } else {
+      // Quiet / Optimal for Whisper Speech Recognition
+      noiseBadge.className = 'noise-badge low';
+      noiseBadge.textContent = 'Quiet (Optimal)';
+      if (noiseAlertBanner && !isNoiseBlocked) noiseAlertBanner.style.display = 'none';
+      if (noiseMonitorCard && !isNoiseBlocked) {
+        noiseMonitorCard.classList.remove('high-alert', 'elevated');
+      }
+      if (noiseTrendText) noiseTrendText.textContent = 'Environment quiet & optimal for Whisper';
+    }
+  }
+
+  function monitorAudioStream() {
+    if (!analyser) return;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyser.getByteFrequencyData(dataArray);
 
     // VU Meter Level
     let sum = 0;
     for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
-    let average = isRecording ? sum / bufferLength : 0;
+    let average = sum / bufferLength;
     let vuWidth = Math.min(100, Math.max(0, (average / 160) * 100));
     if (vuMeterFill) vuMeterFill.style.width = `${vuWidth}%`;
 
-    // Draw Spectrum Bars
-    const barWidth = (width / bufferLength) * 1.5;
-    let x = 0;
+    // Update Real-Time Background Noise Detector & Enforcement
+    updateNoiseMonitor(average);
 
-    for (let i = 0; i < bufferLength; i++) {
-      let barHeight = isRecording ? (dataArray[i] / 255) * height * 0.85 : 3;
-      if (barHeight < 3) barHeight = 3;
-
-      const gradient = canvasCtx.createLinearGradient(0, height - barHeight, 0, height);
-      gradient.addColorStop(0, '#00FF9D');
-      gradient.addColorStop(0.5, '#34D399');
-      gradient.addColorStop(1, '#10B981');
-
-      canvasCtx.fillStyle = gradient;
-      canvasCtx.fillRect(x, height - barHeight, barWidth - 2, barHeight);
-
-      x += barWidth + 2;
-    }
-
-    if (isRecording) {
-      animFrameId = requestAnimationFrame(drawWaveform);
-    } else {
-      // Idle line
-      canvasCtx.fillStyle = 'rgba(16, 185, 129, 0.2)';
-      canvasCtx.fillRect(0, height / 2 - 1, width, 2);
-    }
-  }
-
-  // Draw initial idle visualizer
-  if (waveformCanvas) {
-    drawWaveform();
+    animFrameId = requestAnimationFrame(monitorAudioStream);
   }
 
   // --- RECORDING TIMER ---
@@ -323,8 +430,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- RECORDING CONTROLS ---
   async function startRecording() {
+    if (isNoiseBlocked) {
+      showToast('⚠️ Cannot record speech: Background noise is too high (68+ dB). Move to a quieter area.', 'error');
+      if (noiseAlertBanner) {
+        noiseAlertBanner.style.display = 'flex';
+      }
+      return;
+    }
+
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!micStream) {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
     } catch (err) {
       showToast('Microphone access denied or unavailable in browser.', 'error');
       console.error(err);
@@ -332,6 +449,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     initAudioAnalysis(micStream);
+    if (!animFrameId) {
+      monitorAudioStream();
+    }
 
     currentSessionNum = (vaultRecordings.filter(r => r.type === 'mic').length || 0) + 1;
     currentSessionId = 'rec_' + Date.now();
@@ -344,25 +464,57 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultLiveSessionNum) vaultLiveSessionNum.textContent = `#${currentSessionNum}`;
     if (vaultLiveTimer) vaultLiveTimer.textContent = '00:00';
 
-    mediaRecorder = new MediaRecorder(micStream);
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        audioChunksQueue.push(e.data);
-        currentSessionChunks.push(e.data);
-        const chunkBlob = new Blob([e.data], { type: 'audio/webm' });
-        sendAudioChunkToWhisper(chunkBlob, currentSessionId);
-      }
-    };
-
-    mediaRecorder.onstop = () => {
-      finalizeMicSession();
-    };
-
-    // Slices audio every CHUNK_INTERVAL_MS (4s) for continuous live transcription
-    mediaRecorder.start(CHUNK_INTERVAL_MS);
-
+    // FIX: isRecording must be set to true BEFORE startNextSlice() is called below.
+    // Previously this was set further down (after the setInterval was created),
+    // which meant the very first call to startNextSlice() saw isRecording === false,
+    // its guard clause returned immediately, and mediaRecorder was NEVER created.
+    // That silently broke the entire pipeline: no audio was ever captured or sent
+    // to /transcribe, even though the server and UI looked healthy.
     isRecording = true;
+
+    function startNextSlice() {
+      if (!isRecording || !micStream) return;
+
+      try {
+        mediaRecorder = new MediaRecorder(micStream);
+      } catch (e) {
+        console.error('Failed to create slice recorder:', e);
+        return;
+      }
+
+      let sliceParts = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          sliceParts.push(e.data);
+          currentSessionChunks.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        if (sliceParts.length > 0) {
+          const chunkBlob = new Blob(sliceParts, { type: 'audio/webm' });
+          if (chunkBlob.size > 800) {
+            sendAudioChunkToWhisper(chunkBlob, currentSessionId);
+          }
+        }
+      };
+
+      mediaRecorder.start();
+    }
+
+    startNextSlice();
+
+    // Slices audio every CHUNK_INTERVAL_MS (4s) into clean, standalone WebM files with complete headers
+    clearInterval(chunkSliceInterval);
+    chunkSliceInterval = setInterval(() => {
+      if (!isRecording) return;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        startNextSlice();
+      }
+    }, CHUNK_INTERVAL_MS);
+
     btnToggleMic.classList.add('recording');
     if (micBtnWrapper) micBtnWrapper.classList.add('active');
     if (liveRecDot) liveRecDot.classList.add('active');
@@ -378,8 +530,6 @@ document.addEventListener('DOMContentLoaded', () => {
       updateTimer();
     }, 1000);
 
-    // Start FFT waveform loop
-    drawWaveform();
     showToast('🎙️ Live Recording Started • Speaking Konkani', 'info');
   }
 
@@ -404,38 +554,52 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     addRecordToVault(sessionRecord);
-    showToast('✓ Spoken recording saved to Vault below! Ready to listen & download', 'success');
+    showToast('✓ Spoken recording saved to Vault! Ready to listen & download', 'success');
   }
 
-  function stopRecording() {
+  function stopRecording(stoppedDueToNoise = false) {
     isRecording = false;
 
     if (vaultLiveBanner) vaultLiveBanner.style.display = 'none';
     if (btnToggleMic) btnToggleMic.classList.remove('recording');
     if (micBtnWrapper) micBtnWrapper.classList.remove('active');
     if (liveRecDot) liveRecDot.classList.remove('active');
-    if (deckStatusBadge) deckStatusBadge.textContent = 'MIC PAUSED';
-    if (recordHint) recordHint.textContent = 'Recording stopped • Click microphone to record again';
+
+    if (stoppedDueToNoise) {
+      if (deckStatusBadge) deckStatusBadge.textContent = 'NOISE BLOCKED';
+      if (recordHint) recordHint.textContent = 'Recording stopped • Background noise too high';
+    } else {
+      if (deckStatusBadge) deckStatusBadge.textContent = isNoiseBlocked ? 'NOISE BLOCKED' : 'MIC PAUSED';
+      if (recordHint) recordHint.textContent = isNoiseBlocked ? 'Speech blocked • Environment too noisy' : 'Recording stopped • Click microphone to record again';
+    }
 
     clearInterval(recTimerInterval);
+    clearInterval(chunkSliceInterval);
 
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
       try { mediaRecorder.stop(); } catch (e) {}
     }
 
-    if (micStream) {
-      micStream.getTracks().forEach(t => t.stop());
-    }
+    setTimeout(() => {
+      finalizeMicSession();
+    }, 250);
 
-    if (animFrameId) cancelAnimationFrame(animFrameId);
-    drawWaveform();
-    showToast('⏹️ Recording Stopped', 'info');
+    if (!stoppedDueToNoise) {
+      showToast('⏹️ Recording Stopped', 'info');
+    }
   }
 
   // Single Record Button Toggle Listener
   if (btnToggleMic) {
     btnToggleMic.addEventListener('click', () => {
       if (!isRecording) {
+        if (isNoiseBlocked) {
+          showToast('⚠️ Cannot record speech: Excessive background noise detected! Please quiet your environment.', 'error');
+          if (noiseAlertBanner) {
+            noiseAlertBanner.style.display = 'flex';
+          }
+          return;
+        }
         startRecording();
       } else {
         stopRecording();
@@ -783,6 +947,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultCountBadge) {
       vaultCountBadge.textContent = `${vaultRecordings.length} ${vaultRecordings.length === 1 ? 'RECORDING' : 'RECORDINGS'}`;
     }
+    if (headerVaultBadge) {
+      headerVaultBadge.textContent = vaultRecordings.length;
+    }
 
     // Update Summary Metrics
     if (vaultStatTotal) vaultStatTotal.textContent = vaultRecordings.length;
@@ -1095,6 +1262,71 @@ End of Konkani Voice AI Studio Export
   if (btnClearVault) {
     btnClearVault.addEventListener('click', clearEntireVault);
   }
+
+  // --- VAULT POP-UP MODAL CONTROLLERS ---
+  function openVaultModal() {
+    if (!vaultModalBackdrop) return;
+    vaultModalBackdrop.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+    renderVaultCards(vaultSearchInput ? vaultSearchInput.value : '');
+    if (window.lucide) {
+      lucide.createIcons();
+    }
+    if (vaultSearchInput) {
+      setTimeout(() => vaultSearchInput.focus(), 150);
+    }
+  }
+
+  function closeVaultModal() {
+    if (!vaultModalBackdrop) return;
+    vaultModalBackdrop.style.display = 'none';
+    document.body.style.overflow = '';
+  }
+
+  if (btnOpenVault) {
+    btnOpenVault.addEventListener('click', openVaultModal);
+  }
+
+  if (btnCloseVault) {
+    btnCloseVault.addEventListener('click', closeVaultModal);
+  }
+
+  if (vaultModalBackdrop) {
+    vaultModalBackdrop.addEventListener('click', (e) => {
+      // Close only if backdrop itself was clicked, not modal content
+      if (e.target === vaultModalBackdrop) {
+        closeVaultModal();
+      }
+    });
+  }
+
+  // Close modal on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && vaultModalBackdrop && vaultModalBackdrop.style.display === 'flex') {
+      closeVaultModal();
+    }
+  });
+
+  // Warm up ambient background noise monitoring on first user interaction
+  async function initAmbientMic() {
+    if (micStream) return;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      initAudioAnalysis(micStream);
+      if (!animFrameId) {
+        monitorAudioStream();
+      }
+    } catch (e) {
+      // Will be prompted when user clicks record
+    }
+  }
+
+  document.addEventListener('click', function onUserClick() {
+    if (!micStream) {
+      initAmbientMic();
+    }
+    document.removeEventListener('click', onUserClick);
+  }, { once: true });
 
   // Initialize Vault from IndexedDB on page startup
   loadVaultFromDB().then((saved) => {

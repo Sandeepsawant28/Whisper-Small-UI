@@ -20,7 +20,7 @@
 <body>
   <div class="app-layout">
 
-    <!-- Top Navigation Bar -->
+    <!-- Top Navigation Bar / Menu Bar -->
     <header class="app-header">
       <div class="header-brand">
         <div class="brand-logo-box">
@@ -32,48 +32,41 @@
         </div>
       </div>
 
-      <div class="header-status-group">
-        <div class="status-pill" id="server-status-pill">
-          <span class="status-dot pulsing" id="server-status-dot"></span>
-          <span id="server-status-text">Checking Whisper Model...</span>
-        </div>
-
-        <button class="btn-icon-subtle" id="btn-check-server" title="Check Model Server Connection">
-          <i data-lucide="refresh-cw" style="width:14px;"></i>
+      <div class="header-menu-actions">
+        <!-- Recordings Vault Menu Bar Button -->
+        <button class="nav-menu-btn" id="btn-open-vault" title="Open Spoken Recordings & Transcripts Vault">
+          <i data-lucide="archive" class="nav-btn-icon"></i>
+          <span>Recordings Vault</span>
+          <span class="nav-counter-badge" id="header-vault-badge">0</span>
         </button>
+
+        <div class="header-status-group">
+          <div class="status-pill" id="server-status-pill">
+            <span class="status-dot pulsing" id="server-status-dot"></span>
+            <span id="server-status-text">Checking Whisper Model...</span>
+          </div>
+
+          <button class="btn-icon-subtle" id="btn-check-server" title="Check Model Server Connection">
+            <i data-lucide="refresh-cw" style="width:14px;"></i>
+          </button>
+        </div>
       </div>
     </header>
 
-    <!-- Main Workspace (Side-by-Side Dashboard) -->
+    <!-- Main Workspace: 3-Column Balanced Studio with Centered Recording Deck -->
     <main class="dashboard-main">
-      <div class="workspace-grid">
+      <div class="workspace-grid studio-grid">
 
-        <!-- LEFT PANEL: Live Speech Input & Recording Deck -->
-        <section class="glass-card deck-card">
+        <!-- LEFT PANEL: Audio File Tools & Model Configuration -->
+        <aside class="glass-card left-panel-card">
           <div class="card-header">
             <div class="card-title-group">
-              <span class="badge-accent red">
-                <span class="rec-dot" id="live-rec-dot"></span>
-                <span id="deck-status-badge">MIC READY</span>
+              <span class="badge-accent cyan">
+                <i data-lucide="folder-audio" style="width:12px;"></i>
+                <span>FILE STUDIO</span>
               </span>
-              <h2 class="card-title"><i data-lucide="radio" style="color:var(--rose-red);"></i> Voice Recording Deck</h2>
+              <h2 class="card-title"><i data-lucide="file-audio" style="color:#22D3EE;"></i> Audio Files</h2>
             </div>
-            <div class="vu-meter-box" title="Microphone Input Level">
-              <div class="vu-meter-fill" id="vu-meter-fill"></div>
-            </div>
-          </div>
-
-          <!-- Main Recording Hero Section -->
-          <div class="record-hero-box">
-            <div class="mic-button-wrapper" id="mic-btn-wrapper">
-              <button class="hero-mic-btn" id="btn-toggle-mic" title="Click to Start Continuous Recording">
-                <i data-lucide="mic" id="mic-icon"></i>
-              </button>
-              <div class="pulse-ring" id="pulse-ring"></div>
-            </div>
-
-            <div class="timer-display" id="rec-timer">00:00</div>
-            <div class="record-hint" id="record-hint">Click microphone to start recording • Speak in Konkani</div>
           </div>
 
           <!-- Drag & Drop Audio File Upload Zone -->
@@ -82,8 +75,8 @@
             <div class="drop-zone-content" id="drop-zone-trigger">
               <i data-lucide="upload-cloud" class="upload-icon"></i>
               <div class="upload-texts">
-                <span class="upload-title">Or upload an audio file</span>
-                <span class="upload-sub">Click to browse or drop .wav, .mp3, .m4a, .webm</span>
+                <span class="upload-title">Drop audio file here</span>
+                <span class="upload-sub">Click to browse .wav, .mp3, .m4a, .webm</span>
               </div>
             </div>
 
@@ -97,32 +90,118 @@
               <audio id="preview-audio-player" controls class="custom-audio-player"></audio>
               <button type="button" class="btn-transcribe-file" id="btn-transcribe-file">
                 <i data-lucide="sparkles" style="width:14px;"></i>
-                <span id="transcribe-btn-label">Transcribe Uploaded File</span>
+                <span id="transcribe-btn-label">Transcribe Audio File</span>
               </button>
             </div>
           </div>
 
-          <!-- Live Audio Frequency FFT Visualizer Canvas -->
-          <div class="visualizer-container">
-            <canvas id="waveformCanvas"></canvas>
-            <div class="canvas-tag"><i data-lucide="activity" style="width:12px;"></i> Live FFT Audio Stream</div>
+          <!-- Quick Guidelines & Model Info Box -->
+          <div class="studio-info-box">
+            <div class="info-box-title">
+              <i data-lucide="cpu" style="width:14px; color:var(--emerald-400);"></i>
+              <span>Fine-Tuned Whisper Engine</span>
+            </div>
+            <ul class="info-list">
+              <li><i data-lucide="check-circle" style="width:13px; color:var(--neon-green);"></i> LoRA fine-tuned on spoken Konkani audio</li>
+              <li><i data-lucide="check-circle" style="width:13px; color:var(--neon-green);"></i> Outputs native Devanagari script (कोंकणी)</li>
+              <li><i data-lucide="check-circle" style="width:13px; color:var(--neon-green);"></i> Live streaming audio sliced every 4 seconds</li>
+            </ul>
           </div>
 
           <!-- Deck Settings / Diagnostics Strip -->
-          <div class="deck-footer-bar">
+          <div class="deck-footer-bar left-panel-footer">
             <div class="endpoint-info">
-              <i data-lucide="cpu" style="width:13px; color:var(--emerald-400);"></i>
-              <span>Endpoint:</span>
-              <code id="endpoint-url-display">http://localhost:5000/transcribe</code>
+              <i data-lucide="link" style="width:13px; color:var(--emerald-400);"></i>
+              <code id="endpoint-url-display">localhost:5000/transcribe</code>
             </div>
             <div class="chunk-interval-tag">
-              <i data-lucide="clock" style="width:12px;"></i> Chunking: Every 4s
+              <i data-lucide="clock" style="width:12px;"></i> Chunk: 4s
+            </div>
+          </div>
+        </aside>
+
+        <!-- CENTER PANEL: Primary Voice Recording Deck with Centered Mic & Noise Monitor -->
+        <section class="glass-card deck-card center-deck">
+          <div class="card-header">
+            <div class="card-title-group">
+              <span class="badge-accent red">
+                <span class="rec-dot" id="live-rec-dot"></span>
+                <span id="deck-status-badge">MIC READY</span>
+              </span>
+              <h2 class="card-title"><i data-lucide="radio" style="color:var(--rose-red);"></i> Voice Recording Deck</h2>
+            </div>
+            <div class="vu-meter-box" title="Microphone Input VU Level">
+              <div class="vu-meter-fill" id="vu-meter-fill"></div>
+            </div>
+          </div>
+
+          <!-- Centered Recording Mic Hero Section -->
+          <div class="record-hero-box centered-mic-hero">
+            <div class="mic-button-wrapper" id="mic-btn-wrapper">
+              <button class="hero-mic-btn" id="btn-toggle-mic" title="Click to Start / Stop Recording Voice in Konkani">
+                <i data-lucide="mic" id="mic-icon"></i>
+              </button>
+              <div class="pulse-ring" id="pulse-ring"></div>
+              <div class="pulse-ring secondary" id="pulse-ring-2"></div>
+            </div>
+
+            <div class="timer-display" id="rec-timer">00:00</div>
+            <div class="record-hint" id="record-hint">Click microphone to start recording • Speak in Konkani</div>
+            <div class="noise-lock-badge" id="noise-lock-badge" style="display:none;">
+              <i data-lucide="shield-alert" style="width:13px;"></i>
+              <span>Recording Locked • High Background Noise</span>
+            </div>
+          </div>
+
+          <!-- Real-Time Background Noise Level Monitor -->
+          <div class="noise-monitor-card" id="noise-monitor-card">
+            <div class="noise-header">
+              <div class="noise-label-group">
+                <div class="noise-icon-wrapper">
+                  <i data-lucide="waves" class="noise-icon" id="noise-icon"></i>
+                </div>
+                <div>
+                  <div class="noise-title">Background Noise Level</div>
+                  <div class="noise-subtitle">Monitors ambient room sound & voice increases</div>
+                </div>
+              </div>
+              <span class="noise-badge low" id="noise-badge">Quiet (Optimal)</span>
+            </div>
+
+            <div class="noise-meter-container">
+              <div class="noise-meter-track">
+                <div class="noise-meter-fill" id="noise-meter-fill"></div>
+                <div class="noise-marker warning" title="Moderate Noise Threshold (50%)"></div>
+                <div class="noise-marker danger" title="High Noise Alert Threshold (70% - Recording Blocked)"></div>
+              </div>
+              <div class="noise-scale-labels">
+                <span>0 dB (Quiet)</span>
+                <span>50 dB (Moderate)</span>
+                <span>70+ dB (Blocked)</span>
+              </div>
+            </div>
+
+            <div class="noise-details-row">
+              <div class="noise-stat">
+                <span class="stat-caption">Ambient Noise:</span>
+                <span class="stat-val" id="noise-db-text">0 dB</span>
+              </div>
+              <div class="noise-trend-box" id="noise-trend-box">
+                <i data-lucide="shield-check" id="noise-trend-icon" style="width:13px; color:var(--neon-green);"></i>
+                <span id="noise-trend-text">Environment quiet & clear</span>
+              </div>
+            </div>
+
+            <!-- High Noise Warning Notice (Appears when background noise rises) -->
+            <div class="noise-alert-banner" id="noise-alert-banner" style="display:none;">
+              <i data-lucide="shield-alert" style="width:15px; flex-shrink:0;"></i>
+              <span id="noise-alert-text"><strong>High Noise Detected:</strong> Background voice or noise is too high. Recording is locked to protect Whisper transcription quality.</span>
             </div>
           </div>
         </section>
 
-        <!-- RIGHT PANEL: Live Transcribed Konkani Text Feed -->
-        <section class="glass-card transcript-card">
+        <!-- RIGHT PANEL: Live Transcribed Konkani Text Feed & Stats -->
+        <section class="glass-card transcript-card right-panel-card">
           <div class="card-header">
             <div class="card-title-group">
               <span class="badge-accent green">
@@ -159,7 +238,7 @@
             <div class="transcript-placeholder" id="transcript-placeholder">
               <i data-lucide="headphones" style="width:36px; height:36px; opacity:0.35;"></i>
               <p>Your spoken Konkani words will be transcribed and stream here automatically in real time.</p>
-              <span class="placeholder-sub">Click the record button on the left to begin speaking.</span>
+              <span class="placeholder-sub">Click the microphone in the center to begin speaking.</span>
             </div>
             <div class="transcript-feed" id="transcript-feed" style="display:none;"></div>
             <span class="typing-cursor" id="typing-cursor" style="display:none;"></span>
@@ -170,42 +249,55 @@
             <div class="stats-group">
               <span class="stat-item"><strong id="stat-words">0</strong> Words</span>
               <span class="stat-divider">•</span>
-              <span class="stat-item"><strong id="stat-chars">0</strong> Characters</span>
+              <span class="stat-item"><strong id="stat-chars">0</strong> Chars</span>
               <span class="stat-divider">•</span>
               <span class="stat-item"><strong id="stat-chunks">0</strong> Chunks</span>
             </div>
             <div class="language-tag">
-              <i data-lucide="globe" style="width:12px;"></i> Konkani (कोंकणी - Devanagari)
+              <i data-lucide="globe" style="width:12px;"></i> Konkani (कोंकणी)
             </div>
           </div>
         </section>
 
       </div>
+    </main>
 
-      <!-- BOTTOM SECTION: What You Have Spoken & Download History Vault -->
-      <section class="glass-card spoken-vault-card" id="spoken-vault-section">
-        <div class="card-header vault-header">
+    <!-- RECORDINGS VAULT POP-UP MODAL (Triggered from Top Menu Bar) -->
+    <div class="modal-backdrop" id="vault-modal-backdrop" style="display:none;">
+      <div class="modal-container glass-card vault-modal" id="vault-modal" role="dialog" aria-modal="true" aria-labelledby="vault-modal-title">
+        
+        <!-- Modal Header -->
+        <div class="card-header vault-modal-header">
           <div class="card-title-group">
-            <span class="badge-accent cyan">
-              <i data-lucide="archive" style="width:13px;"></i>
-              <span id="vault-count-badge">0 RECORDINGS</span>
-            </span>
-            <div>
-              <h2 class="card-title">
+            <div class="vault-modal-title-row">
+              <span class="badge-accent cyan">
+                <i data-lucide="archive" style="width:13px;"></i>
+                <span id="vault-count-badge">0 RECORDINGS</span>
+              </span>
+              <h2 class="card-title" id="vault-modal-title">
                 <i data-lucide="volume-2" style="color:var(--neon-green);"></i>
                 What You Have Spoken • Audio & Transcript Vault
               </h2>
-              <p class="card-subtitle">Play back your spoken voice, inspect the transcribed Konkani text, and download your audio recordings and transcripts.</p>
             </div>
+            <p class="card-subtitle">Listen back to your spoken recordings, read the transcribed Konkani text, and download your audio (.webm) and transcripts (.txt).</p>
           </div>
 
-          <!-- Toolbar / Filter Controls -->
-          <div class="card-actions vault-actions">
-            <div class="search-input-wrapper">
-              <i data-lucide="search" class="search-icon"></i>
-              <input type="text" id="vault-search-input" placeholder="Filter spoken text..." class="vault-search-input">
-              <button type="button" id="vault-search-clear" class="btn-search-clear" style="display:none;" title="Clear search">&times;</button>
-            </div>
+          <div class="modal-header-actions">
+            <button class="btn-modal-close" id="btn-close-vault" title="Close modal (Esc)">
+              <i data-lucide="x" style="width:20px;"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Modal Toolbar / Filter Controls -->
+        <div class="vault-modal-toolbar">
+          <div class="search-input-wrapper">
+            <i data-lucide="search" class="search-icon"></i>
+            <input type="text" id="vault-search-input" placeholder="Filter spoken text or sessions..." class="vault-search-input">
+            <button type="button" id="vault-search-clear" class="btn-search-clear" style="display:none;" title="Clear search">&times;</button>
+          </div>
+
+          <div class="vault-toolbar-btns">
             <button class="btn-action" id="btn-export-all-transcripts" title="Download all transcripts as one .txt file">
               <i data-lucide="file-text" style="width:14px;"></i> <span>Export All Text</span>
             </button>
@@ -219,7 +311,7 @@
         <div class="vault-live-banner" id="vault-live-banner" style="display:none;">
           <div class="live-banner-indicator">
             <span class="pulse-dot-red"></span>
-            <span class="live-banner-text"><strong>Microphone Active:</strong> Currently speaking into session <span id="vault-live-session-num">#1</span> (<span id="vault-live-timer">00:00</span>). Full audio & Konkani transcript will automatically be saved here when you stop recording.</span>
+            <span class="live-banner-text"><strong>Microphone Active:</strong> Currently speaking into session <span id="vault-live-session-num">#1</span> (<span id="vault-live-timer">00:00</span>). Audio and Konkani transcript will be saved here automatically when stopped.</span>
           </div>
         </div>
 
@@ -246,8 +338,8 @@
           </div>
         </div>
 
-        <!-- Vault List Container -->
-        <div class="vault-list-container" id="vault-list-container">
+        <!-- Vault List Container (Scrollable) -->
+        <div class="vault-list-container modal-scroll-container" id="vault-list-container">
           <!-- Empty State -->
           <div class="vault-empty-state" id="vault-empty-state">
             <div class="empty-icon-circle">
@@ -255,7 +347,7 @@
             </div>
             <h3 class="empty-title">No Spoken Recordings Yet</h3>
             <p class="empty-description">
-              Start speaking using the <strong>Voice Recording Deck</strong> above or upload an audio file.
+              Start speaking using the <strong>Voice Recording Deck</strong> in the center or upload an audio file on the left.
               Every spoken session will be automatically saved here so you can listen back to your voice, read what you spoke in Konkani, and download your audio files (.webm) and transcripts (.txt)!
             </p>
           </div>
@@ -263,8 +355,8 @@
           <!-- Dynamic Cards Grid -->
           <div class="vault-cards-grid" id="vault-cards-grid" style="display:none;"></div>
         </div>
-      </section>
-    </main>
+      </div>
+    </div>
 
     <!-- Toast Notification Banner -->
     <div id="toast" class="toast-popup">
