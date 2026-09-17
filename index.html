@@ -171,13 +171,13 @@
             <div class="noise-meter-container">
               <div class="noise-meter-track">
                 <div class="noise-meter-fill" id="noise-meter-fill"></div>
-                <div class="noise-marker warning" title="Moderate Noise Threshold (50%)"></div>
-                <div class="noise-marker danger" title="High Noise Alert Threshold (70% - Recording Blocked)"></div>
+                <div class="noise-marker warning" title="Normal Voice / Moderate Threshold (65 dB)"></div>
+                <div class="noise-marker danger" title="Loud Noise Alert Threshold (85+ dB)"></div>
               </div>
               <div class="noise-scale-labels">
                 <span>0 dB (Quiet)</span>
-                <span>50 dB (Moderate)</span>
-                <span>70+ dB (Blocked)</span>
+                <span>65 dB (Voice / Normal)</span>
+                <span>85+ dB (Loud)</span>
               </div>
             </div>
 
@@ -195,7 +195,7 @@
             <!-- High Noise Warning Notice (Appears when background noise rises) -->
             <div class="noise-alert-banner" id="noise-alert-banner" style="display:none;">
               <i data-lucide="shield-alert" style="width:15px; flex-shrink:0;"></i>
-              <span id="noise-alert-text"><strong>High Noise Detected:</strong> Background voice or noise is too high. Recording is locked to protect Whisper transcription quality.</span>
+              <span id="noise-alert-text"><strong>High Noise Notice:</strong> Ambient room noise exceeds 85 dB. For best Whisper accuracy, speak clearly close to the microphone.</span>
             </div>
           </div>
         </section>

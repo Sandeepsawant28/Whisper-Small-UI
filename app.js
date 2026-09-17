@@ -215,55 +215,83 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Normalized meter fill 0% to 100%
-    const meterPercent = Math.min(100, Math.max(6, Math.round((smoothed / 135) * 100)));
+    const meterPercent = Math.min(100, Math.max(6, Math.round((smoothed / 160) * 100)));
     noiseMeterFill.style.width = `${meterPercent}%`;
 
-    // Estimated ambient decibels (20 dB quiet room to 95 dB loud noise/voices)
+    // Estimated current sound decibels (20 dB quiet room to 95 dB peak loud sound/voices)
     const estimatedDb = Math.min(95, Math.max(20, Math.round(20 + (smoothed / 160) * 75)));
+    // Baseline ambient room noise floor in decibels
+    const baselineDb = Math.min(95, Math.max(20, Math.round(20 + (ambientNoiseFloor / 160) * 75)));
+
     if (noiseDbText) noiseDbText.textContent = `${estimatedDb} dB`;
 
-    // Detect if background noise or voice is increasing
-    const isRising = smoothed > (movingAvg * 1.25) && smoothed > 30;
+    // --- CASE 1: ACTIVELY RECORDING ---
+    // When actively recording, the user is speaking into the microphone.
+    // Speech volume is expected and desired — NEVER treat speech as background noise or stop recording!
+    if (isRecording) {
+      isNoiseBlocked = false;
+      consecutiveHighNoiseFrames = 0;
+      if (btnToggleMic) btnToggleMic.classList.remove('noise-blocked');
+      if (noiseLockBadge) noiseLockBadge.style.display = 'none';
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
+      if (noiseMonitorCard) {
+        noiseMonitorCard.classList.remove('high-alert', 'elevated');
+      }
+
+      if (estimatedDb >= 55) {
+        noiseBadge.className = 'noise-badge low';
+        noiseBadge.textContent = 'Voice Active (Recording)';
+        if (noiseTrendText) noiseTrendText.textContent = '🎙️ Konkani speech captured • Streaming to Whisper';
+      } else {
+        noiseBadge.className = 'noise-badge low';
+        noiseBadge.textContent = 'Recording Live';
+        if (noiseTrendText) noiseTrendText.textContent = 'Listening continuously for Konkani speech...';
+      }
+      return;
+    }
+
+    // --- CASE 2: IDLE / PRE-RECORDING MONITORING ---
+    // Detect transient voice or sound rises
+    const isRising = smoothed > (movingAvg * 1.35) && smoothed > 35;
     if (isRising) {
       consecutiveIncreasingFrames++;
     } else {
       consecutiveIncreasingFrames = Math.max(0, consecutiveIncreasingFrames - 1);
     }
-    const isNoiseIncreasing = consecutiveIncreasingFrames >= 3;
 
-    // Excessive noise threshold (68 dB / 68% meter): Do NOT allow recording
-    const isExcessiveNoise = meterPercent >= 68 || estimatedDb >= 68;
+    // Increased noise thresholds:
+    // Excessive noise threshold raised to 85+ dB (previously 68 dB)
+    // Requires sustained high noise (35+ consecutive frames, ~0.6s) so speech/clicks never block recording
+    const isExcessiveNoise = estimatedDb >= 85 && (baselineDb >= 65 || smoothed >= 135);
 
     if (isExcessiveNoise) {
       consecutiveHighNoiseFrames++;
     } else {
-      consecutiveHighNoiseFrames = Math.max(0, consecutiveHighNoiseFrames - 1);
+      consecutiveHighNoiseFrames = Math.max(0, consecutiveHighNoiseFrames - 2);
     }
 
-    if (consecutiveHighNoiseFrames >= 3) {
-      // --- RECORDING IS BLOCKED DUE TO HIGH BACKGROUND NOISE ---
+    if (consecutiveHighNoiseFrames >= 35) {
+      // Sustained extreme noise (85+ dB)
       isNoiseBlocked = true;
-      if (btnToggleMic) btnToggleMic.classList.add('noise-blocked');
-      if (noiseLockBadge) noiseLockBadge.style.display = 'inline-flex';
-      if (deckStatusBadge && !isRecording) deckStatusBadge.textContent = 'NOISE BLOCKED';
-      if (recordHint && !isRecording) recordHint.textContent = 'Speech recording blocked • High background noise';
+      if (deckStatusBadge && !isRecording) deckStatusBadge.textContent = 'LOUD NOISE';
+      if (recordHint && !isRecording) recordHint.textContent = 'Loud environment (>85 dB) • Speak close to mic';
 
       noiseBadge.className = 'noise-badge high';
-      noiseBadge.textContent = 'Blocked (Too Loud)';
-      if (noiseAlertBanner) noiseAlertBanner.style.display = 'flex';
+      noiseBadge.textContent = 'Loud (85+ dB)';
+      if (noiseAlertBanner) {
+        noiseAlertBanner.style.display = 'flex';
+        const alertText = document.getElementById('noise-alert-text');
+        if (alertText) {
+          alertText.innerHTML = '<strong>High Noise Alert (85+ dB):</strong> High background noise detected. Speak clearly and close to the microphone for optimal Konkani transcription.';
+        }
+      }
       if (noiseMonitorCard) {
         noiseMonitorCard.classList.add('high-alert');
         noiseMonitorCard.classList.remove('elevated');
       }
-      if (noiseTrendText) noiseTrendText.textContent = '🚨 Speech blocked: Ambient noise exceeds 68 dB';
-
-      // If user was actively recording and high noise persists for ~1.5s, auto-stop to prevent garbage transcription
-      if (isRecording && consecutiveHighNoiseFrames >= 12) {
-        stopRecording(true);
-        showToast('⚠️ Recording stopped: Background noise increased too much for speech recognition.', 'error');
-      }
+      if (noiseTrendText) noiseTrendText.textContent = '⚠️ Ambient noise exceeds 85 dB • Speak close to mic';
     } else if (isNoiseBlocked && consecutiveHighNoiseFrames === 0) {
-      // --- NOISE DROPPED: UNBLOCK RECORDING ---
+      // Noise dropped back down
       isNoiseBlocked = false;
       if (btnToggleMic) btnToggleMic.classList.remove('noise-blocked');
       if (noiseLockBadge) noiseLockBadge.style.display = 'none';
@@ -271,26 +299,26 @@ document.addEventListener('DOMContentLoaded', () => {
       if (recordHint && !isRecording) recordHint.textContent = 'Click microphone to start recording • Speak in Konkani';
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
       if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert');
-    } else if (isNoiseIncreasing || meterPercent >= 46 || estimatedDb >= 50) {
-      // Moderate / increasing noise warning
+    } else if (estimatedDb >= 65 || meterPercent >= 65) {
+      // Moderate noise / normal speech levels (65 - 84 dB)
       noiseBadge.className = 'noise-badge medium';
-      noiseBadge.textContent = isNoiseIncreasing ? '⚠️ Noise Increasing' : 'Moderate Noise';
-      if (noiseAlertBanner && !isNoiseBlocked) noiseAlertBanner.style.display = isNoiseIncreasing ? 'flex' : 'none';
+      noiseBadge.textContent = 'Normal / Speech';
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
       if (noiseMonitorCard) {
         noiseMonitorCard.classList.remove('high-alert');
         noiseMonitorCard.classList.add('elevated');
       }
       if (noiseTrendText) {
-        noiseTrendText.textContent = isNoiseIncreasing 
-          ? '⚠️ Background voice or noise is rising!' 
-          : 'Moderate ambient background sound';
+        noiseTrendText.textContent = isRising 
+          ? 'Voice detected • Ready to record' 
+          : 'Normal ambient sound • Optimal for Whisper';
       }
     } else {
-      // Quiet / Optimal for Whisper Speech Recognition
+      // Quiet / Optimal (0 - 64 dB)
       noiseBadge.className = 'noise-badge low';
       noiseBadge.textContent = 'Quiet (Optimal)';
-      if (noiseAlertBanner && !isNoiseBlocked) noiseAlertBanner.style.display = 'none';
-      if (noiseMonitorCard && !isNoiseBlocked) {
+      if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
+      if (noiseMonitorCard) {
         noiseMonitorCard.classList.remove('high-alert', 'elevated');
       }
       if (noiseTrendText) noiseTrendText.textContent = 'Environment quiet & optimal for Whisper';
@@ -430,12 +458,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- RECORDING CONTROLS ---
   async function startRecording() {
+    // If background noise is extremely high (>85 dB), show an informative tip but do NOT prevent recording
     if (isNoiseBlocked) {
-      showToast('⚠️ Cannot record speech: Background noise is too high (68+ dB). Move to a quieter area.', 'error');
-      if (noiseAlertBanner) {
-        noiseAlertBanner.style.display = 'flex';
-      }
-      return;
+      showToast('ℹ️ Notice: High ambient noise (>85 dB). Speaking close to mic is recommended.', 'info');
+      isNoiseBlocked = false;
     }
 
     try {
@@ -557,21 +583,16 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('✓ Spoken recording saved to Vault! Ready to listen & download', 'success');
   }
 
-  function stopRecording(stoppedDueToNoise = false) {
+  function stopRecording() {
     isRecording = false;
 
     if (vaultLiveBanner) vaultLiveBanner.style.display = 'none';
-    if (btnToggleMic) btnToggleMic.classList.remove('recording');
+    if (btnToggleMic) btnToggleMic.classList.remove('recording', 'noise-blocked');
     if (micBtnWrapper) micBtnWrapper.classList.remove('active');
     if (liveRecDot) liveRecDot.classList.remove('active');
 
-    if (stoppedDueToNoise) {
-      if (deckStatusBadge) deckStatusBadge.textContent = 'NOISE BLOCKED';
-      if (recordHint) recordHint.textContent = 'Recording stopped • Background noise too high';
-    } else {
-      if (deckStatusBadge) deckStatusBadge.textContent = isNoiseBlocked ? 'NOISE BLOCKED' : 'MIC PAUSED';
-      if (recordHint) recordHint.textContent = isNoiseBlocked ? 'Speech blocked • Environment too noisy' : 'Recording stopped • Click microphone to record again';
-    }
+    if (deckStatusBadge) deckStatusBadge.textContent = 'MIC PAUSED';
+    if (recordHint) recordHint.textContent = 'Recording stopped • Click microphone to record again';
 
     clearInterval(recTimerInterval);
     clearInterval(chunkSliceInterval);
@@ -584,22 +605,13 @@ document.addEventListener('DOMContentLoaded', () => {
       finalizeMicSession();
     }, 250);
 
-    if (!stoppedDueToNoise) {
-      showToast('⏹️ Recording Stopped', 'info');
-    }
+    showToast('⏹️ Recording Stopped', 'info');
   }
 
   // Single Record Button Toggle Listener
   if (btnToggleMic) {
     btnToggleMic.addEventListener('click', () => {
       if (!isRecording) {
-        if (isNoiseBlocked) {
-          showToast('⚠️ Cannot record speech: Excessive background noise detected! Please quiet your environment.', 'error');
-          if (noiseAlertBanner) {
-            noiseAlertBanner.style.display = 'flex';
-          }
-          return;
-        }
         startRecording();
       } else {
         stopRecording();
