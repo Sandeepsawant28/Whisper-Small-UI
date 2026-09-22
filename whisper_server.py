@@ -12,6 +12,7 @@ os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '60'
 os.environ['HF_HUB_ETAG_TIMEOUT'] = '30'
 
 import os
+import gc
 import tempfile
 import traceback
 
@@ -28,15 +29,25 @@ ADAPTER_ID = "sandeepsawant28/whisper-small-konkani"  # LoRA adapter repo (verif
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Use float16 on CPU to cut memory usage roughly in half (needed for low-RAM hosting).
+MODEL_DTYPE = torch.float16
+
 model = None
 processor = None
 
 try:
     print(f"Loading Konkani Whisper Small model (LoRA adapter) on {device}...")
     processor = WhisperProcessor.from_pretrained(ADAPTER_ID)
-    base_model = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL_ID)
+    base_model = WhisperForConditionalGeneration.from_pretrained(
+        BASE_MODEL_ID,
+        torch_dtype=MODEL_DTYPE,
+        low_cpu_mem_usage=True
+    )
     model = PeftModel.from_pretrained(base_model, ADAPTER_ID).to(device)
+    model = model.half()  # ensure LoRA adapter weights are also float16
     model.eval()
+
+    gc.collect()
     print("[OK] Model loaded successfully!")
 except Exception as e:
     print(f"Notice: Model load failed ({e}). Running server in API ready mode.")
@@ -108,7 +119,7 @@ def transcribe_audio():
 
         input_features = processor(
             audio_input, sampling_rate=16000, return_tensors="pt"
-        ).input_features.to(device)
+        ).input_features.to(device, dtype=MODEL_DTYPE)
 
         with torch.no_grad():
             predicted_ids = model.generate(
