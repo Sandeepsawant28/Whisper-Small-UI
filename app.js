@@ -1,17 +1,27 @@
 /**
  * Konkani Voice AI Studio - Frontend Controller
- * Communicates with Whisper Small LoRA server at http://localhost:5000/transcribe
+ * Communicates with the Whisper Small LoRA Gradio backend hosted on Hugging Face Spaces
+ * (sandeepsawant28/whisper-konkani-backend) via the official @gradio/client JS library.
  */
-   import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.14.2/dist/index.min.js";
+import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.14.2/dist/index.min.js";
+
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize Lucide Icons
   if (window.lucide) {
     lucide.createIcons();
   }
 
-  const WHISPER_API_URL = 'http://localhost:5000/transcribe';
-  const WHISPER_HEALTH_URL = 'http://localhost:5000/health';
+  // --- GRADIO BACKEND CLIENT ---
+  const HF_SPACE_ID = "sandeepsawant28/whisper-konkani-backend";
   const CHUNK_INTERVAL_MS = 4000; // Slice audio every 4 seconds for continuous live transcription
+
+  let gradioClientPromise = null;
+  function getGradioClient() {
+    if (!gradioClientPromise) {
+      gradioClientPromise = Client.connect(HF_SPACE_ID);
+    }
+    return gradioClientPromise;
+  }
 
   // DOM Elements
   const btnToggleMic = document.getElementById('btn-toggle-mic');
@@ -54,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnDownloadTxt = document.getElementById('btn-download-txt');
   const btnClearTranscript = document.getElementById('btn-clear-transcript');
 
-  // Spoken Vault & Download Elements
   const vaultCountBadge = document.getElementById('vault-count-badge');
   const vaultSearchInput = document.getElementById('vault-search-input');
   const vaultSearchClear = document.getElementById('vault-search-clear');
@@ -69,13 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const vaultEmptyState = document.getElementById('vault-empty-state');
   const vaultCardsGrid = document.getElementById('vault-cards-grid');
 
-  // Vault Modal & Header Menu Elements
   const btnOpenVault = document.getElementById('btn-open-vault');
   const btnCloseVault = document.getElementById('btn-close-vault');
   const vaultModalBackdrop = document.getElementById('vault-modal-backdrop');
   const headerVaultBadge = document.getElementById('header-vault-badge');
 
-  // Background Noise Level Monitor Elements
   const noiseMonitorCard = document.getElementById('noise-monitor-card');
   const noiseBadge = document.getElementById('noise-badge');
   const noiseMeterFill = document.getElementById('noise-meter-fill');
@@ -88,7 +95,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const toastText = document.getElementById('toast-text');
   const toastIcon = document.getElementById('toast-icon');
 
-  // State
   let isRecording = false;
   let micStream = null;
   let mediaRecorder = null;
@@ -104,57 +110,52 @@ document.addEventListener('DOMContentLoaded', () => {
   let accumulatedText = [];
   let totalChunksTranscribed = 0;
 
-  // Vault State
   let vaultRecordings = [];
   let currentSessionId = null;
   let currentSessionNum = 0;
   let currentSessionChunks = [];
   let currentSessionTexts = [];
 
-  // --- TOAST NOTIFICATIONS ---
   let toastTimeout = null;
   function showToast(message, type = 'info') {
     if (!toast || !toastText) return;
     toastText.textContent = message;
     toast.className = `toast-popup show ${type}`;
-
     if (toastTimeout) clearTimeout(toastTimeout);
     toastTimeout = setTimeout(() => {
       toast.classList.remove('show');
     }, 3500);
   }
 
-  // --- HEALTH CHECK PING ---
   async function checkServerHealth() {
     if (serverStatusText) serverStatusText.textContent = 'Checking Model...';
     try {
-      const res = await fetch(WHISPER_HEALTH_URL, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const client = await getGradioClient();
+      const result = await client.predict('/check_health', []);
+      const data = result.data[0];
 
-      if (data.status === 'online') {
+      if (data && data.status === 'online') {
         serverStatusPill.className = 'status-pill';
         serverStatusText.textContent = `Whisper Online (${data.model || 'Konkani LoRA'})`;
         showToast('✓ Konkani Whisper Model Connected & Ready', 'success');
       } else {
         serverStatusPill.className = 'status-pill warning';
-        serverStatusText.textContent = 'Model Loading in Terminal...';
-        showToast('Whisper server online, model still loading weights.', 'warning');
+        serverStatusText.textContent = 'Model Loading on Space...';
+        showToast('Space online, model still loading weights.', 'warning');
       }
     } catch (err) {
       serverStatusPill.className = 'status-pill offline';
-      serverStatusText.textContent = 'Whisper Server Offline (Port 5000)';
-      showToast('⚠️ Whisper server offline. Run "python whisper_server.py" in terminal.', 'error');
+      serverStatusText.textContent = 'Whisper Space Unreachable';
+      showToast('⚠️ Could not reach the Hugging Face Space. It may be waking up — try again shortly.', 'error');
+      console.error('Health check error:', err);
     }
   }
 
   if (btnCheckServer) {
     btnCheckServer.addEventListener('click', checkServerHealth);
   }
-  // Initial check on page load
   checkServerHealth();
 
-  // --- REAL-TIME AUDIO MONITOR & BACKGROUND NOISE BLOCKER ---
   let isNoiseBlocked = false;
   let noiseHistory = [];
   let ambientNoiseFloor = 8;
@@ -169,7 +170,6 @@ document.addEventListener('DOMContentLoaded', () => {
       audioCtx = new AudioContextClass();
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 64;
-
       const source = audioCtx.createMediaStreamSource(stream);
       source.connect(analyser);
     } catch (e) {
@@ -189,54 +189,40 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (noiseTrendText) noiseTrendText.textContent = 'Environment quiet • Ready to monitor';
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
-      if (noiseMonitorCard) {
-        noiseMonitorCard.classList.remove('high-alert', 'elevated');
-      }
+      if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert', 'elevated');
       return;
     }
 
-    // Smooth the raw input level
     const smoothed = (lastSmoothedLevel * 0.65) + (currentRawAvg * 0.35);
     lastSmoothedLevel = smoothed;
 
-    // Track rolling history (last 24 frames)
     noiseHistory.push(smoothed);
     if (noiseHistory.length > 24) noiseHistory.shift();
 
-    // Moving average of recent audio volume
     const historySum = noiseHistory.reduce((a, b) => a + b, 0);
     const movingAvg = historySum / noiseHistory.length;
 
-    // Adaptive noise floor tracking
     if (smoothed < ambientNoiseFloor) {
       ambientNoiseFloor = smoothed;
     } else {
       ambientNoiseFloor = (ambientNoiseFloor * 0.995) + (smoothed * 0.005);
     }
 
-    // Normalized meter fill 0% to 100%
     const meterPercent = Math.min(100, Math.max(6, Math.round((smoothed / 160) * 100)));
     noiseMeterFill.style.width = `${meterPercent}%`;
 
-    // Estimated current sound decibels (20 dB quiet room to 95 dB peak loud sound/voices)
     const estimatedDb = Math.min(95, Math.max(20, Math.round(20 + (smoothed / 160) * 75)));
-    // Baseline ambient room noise floor in decibels
     const baselineDb = Math.min(95, Math.max(20, Math.round(20 + (ambientNoiseFloor / 160) * 75)));
 
     if (noiseDbText) noiseDbText.textContent = `${estimatedDb} dB`;
 
-    // --- CASE 1: ACTIVELY RECORDING ---
-    // When actively recording, the user is speaking into the microphone.
-    // Speech volume is expected and desired — NEVER treat speech as background noise or stop recording!
     if (isRecording) {
       isNoiseBlocked = false;
       consecutiveHighNoiseFrames = 0;
       if (btnToggleMic) btnToggleMic.classList.remove('noise-blocked');
       if (noiseLockBadge) noiseLockBadge.style.display = 'none';
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
-      if (noiseMonitorCard) {
-        noiseMonitorCard.classList.remove('high-alert', 'elevated');
-      }
+      if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert', 'elevated');
 
       if (estimatedDb >= 55) {
         noiseBadge.className = 'noise-badge low';
@@ -250,8 +236,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // --- CASE 2: IDLE / PRE-RECORDING MONITORING ---
-    // Detect transient voice or sound rises
     const isRising = smoothed > (movingAvg * 1.35) && smoothed > 35;
     if (isRising) {
       consecutiveIncreasingFrames++;
@@ -259,9 +243,6 @@ document.addEventListener('DOMContentLoaded', () => {
       consecutiveIncreasingFrames = Math.max(0, consecutiveIncreasingFrames - 1);
     }
 
-    // Increased noise thresholds:
-    // Excessive noise threshold raised to 85+ dB (previously 68 dB)
-    // Requires sustained high noise (35+ consecutive frames, ~0.6s) so speech/clicks never block recording
     const isExcessiveNoise = estimatedDb >= 85 && (baselineDb >= 65 || smoothed >= 135);
 
     if (isExcessiveNoise) {
@@ -271,7 +252,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (consecutiveHighNoiseFrames >= 35) {
-      // Sustained extreme noise (85+ dB)
       isNoiseBlocked = true;
       if (deckStatusBadge && !isRecording) deckStatusBadge.textContent = 'LOUD NOISE';
       if (recordHint && !isRecording) recordHint.textContent = 'Loud environment (>85 dB) • Speak close to mic';
@@ -291,7 +271,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (noiseTrendText) noiseTrendText.textContent = '⚠️ Ambient noise exceeds 85 dB • Speak close to mic';
     } else if (isNoiseBlocked && consecutiveHighNoiseFrames === 0) {
-      // Noise dropped back down
       isNoiseBlocked = false;
       if (btnToggleMic) btnToggleMic.classList.remove('noise-blocked');
       if (noiseLockBadge) noiseLockBadge.style.display = 'none';
@@ -300,7 +279,6 @@ document.addEventListener('DOMContentLoaded', () => {
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
       if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert');
     } else if (estimatedDb >= 65 || meterPercent >= 65) {
-      // Moderate noise / normal speech levels (65 - 84 dB)
       noiseBadge.className = 'noise-badge medium';
       noiseBadge.textContent = 'Normal / Speech';
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
@@ -309,43 +287,35 @@ document.addEventListener('DOMContentLoaded', () => {
         noiseMonitorCard.classList.add('elevated');
       }
       if (noiseTrendText) {
-        noiseTrendText.textContent = isRising 
-          ? 'Voice detected • Ready to record' 
+        noiseTrendText.textContent = isRising
+          ? 'Voice detected • Ready to record'
           : 'Normal ambient sound • Optimal for Whisper';
       }
     } else {
-      // Quiet / Optimal (0 - 64 dB)
       noiseBadge.className = 'noise-badge low';
       noiseBadge.textContent = 'Quiet (Optimal)';
       if (noiseAlertBanner) noiseAlertBanner.style.display = 'none';
-      if (noiseMonitorCard) {
-        noiseMonitorCard.classList.remove('high-alert', 'elevated');
-      }
+      if (noiseMonitorCard) noiseMonitorCard.classList.remove('high-alert', 'elevated');
       if (noiseTrendText) noiseTrendText.textContent = 'Environment quiet & optimal for Whisper';
     }
   }
 
   function monitorAudioStream() {
     if (!analyser) return;
-
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
     analyser.getByteFrequencyData(dataArray);
 
-    // VU Meter Level
     let sum = 0;
     for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
     let average = sum / bufferLength;
     let vuWidth = Math.min(100, Math.max(0, (average / 160) * 100));
     if (vuMeterFill) vuMeterFill.style.width = `${vuWidth}%`;
 
-    // Update Real-Time Background Noise Detector & Enforcement
     updateNoiseMonitor(average);
-
     animFrameId = requestAnimationFrame(monitorAudioStream);
   }
 
-  // --- RECORDING TIMER ---
   function updateTimer() {
     const mins = Math.floor(recSeconds / 60).toString().padStart(2, '0');
     const secs = (recSeconds % 60).toString().padStart(2, '0');
@@ -354,30 +324,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultLiveTimer) vaultLiveTimer.textContent = timeStr;
   }
 
-  // --- SEND AUDIO CHUNK TO WHISPER SERVER ---
   async function sendAudioChunkToWhisper(blob, sessionId = null) {
     if (!blob || blob.size === 0) return;
 
-    const formData = new FormData();
-    formData.append('audio', blob, 'audio_chunk.webm');
-
     try {
-      const response = await fetch(WHISPER_API_URL, {
-        method: 'POST',
-        body: formData
-      });
+      const client = await getGradioClient();
+      const result = await client.predict('/transcribe', [handle_file(blob)]);
+      const data = result.data[0];
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
       if (data && data.text && data.text.trim().length > 0) {
         const trimmed = data.text.trim();
         handleReceivedTranscription(trimmed);
 
-        // Associate with live recording session or update finished session card
         if (sessionId) {
           currentSessionTexts.push(trimmed);
           const existingItem = vaultRecordings.find(r => r.id === sessionId);
@@ -394,18 +352,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // --- HANDLE INCOMING TRANSCRIPTION TEXT ---
   function handleReceivedTranscription(konkaniSentence, sourceLabel = null) {
     if (!konkaniSentence || konkaniSentence.trim().length === 0) return;
 
     totalChunksTranscribed++;
     accumulatedText.push(konkaniSentence);
 
-    // Hide placeholder, reveal feed
     if (transcriptPlaceholder) transcriptPlaceholder.style.display = 'none';
     if (transcriptFeed) transcriptFeed.style.display = 'flex';
 
-    // Create entry element
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const entryEl = document.createElement('div');
     entryEl.className = 'transcript-entry';
@@ -420,32 +375,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     transcriptFeed.appendChild(entryEl);
 
-    // Auto-scroll to latest
     if (transcriptScrollBox) {
       transcriptScrollBox.scrollTop = transcriptScrollBox.scrollHeight;
     }
 
-    // Update Word Ribbon Tokens
     updateWordRibbon(konkaniSentence);
-
-    // Update Statistics
     updateStatistics();
   }
 
-  // --- UPDATE WORD RIBBON WITH TOKENS ---
   function updateWordRibbon(text) {
     if (!ribbonTokensContainer) return;
     const words = text.split(/\s+/).filter(w => w.trim().length > 0);
-
     let html = '';
     words.forEach(w => {
       html += `<span class="token-chip">[${w}]</span>`;
     });
-
     ribbonTokensContainer.innerHTML = html;
   }
 
-  // --- UPDATE STATISTICS ---
   function updateStatistics() {
     const fullText = accumulatedText.join(' ').trim();
     const words = fullText.length > 0 ? fullText.split(/\s+/).filter(w => w.length > 0).length : 0;
@@ -456,9 +403,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (statChunks) statChunks.textContent = totalChunksTranscribed;
   }
 
-  // --- RECORDING CONTROLS ---
   async function startRecording() {
-    // If background noise is extremely high (>85 dB), show an informative tip but do NOT prevent recording
     if (isNoiseBlocked) {
       showToast('ℹ️ Notice: High ambient noise (>85 dB). Speaking close to mic is recommended.', 'info');
       isNoiseBlocked = false;
@@ -485,17 +430,10 @@ document.addEventListener('DOMContentLoaded', () => {
     currentSessionTexts = [];
     audioChunksQueue = [];
 
-    // Show live recording banner in vault
     if (vaultLiveBanner) vaultLiveBanner.style.display = 'block';
     if (vaultLiveSessionNum) vaultLiveSessionNum.textContent = `#${currentSessionNum}`;
     if (vaultLiveTimer) vaultLiveTimer.textContent = '00:00';
 
-    // FIX: isRecording must be set to true BEFORE startNextSlice() is called below.
-    // Previously this was set further down (after the setInterval was created),
-    // which meant the very first call to startNextSlice() saw isRecording === false,
-    // its guard clause returned immediately, and mediaRecorder was NEVER created.
-    // That silently broke the entire pipeline: no audio was ever captured or sent
-    // to /transcribe, even though the server and UI looked healthy.
     isRecording = true;
 
     function startNextSlice() {
@@ -531,7 +469,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     startNextSlice();
 
-    // Slices audio every CHUNK_INTERVAL_MS (4s) into clean, standalone WebM files with complete headers
     clearInterval(chunkSliceInterval);
     chunkSliceInterval = setInterval(() => {
       if (!isRecording) return;
@@ -547,7 +484,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (deckStatusBadge) deckStatusBadge.textContent = 'RECORDING LIVE';
     if (recordHint) recordHint.textContent = 'Listening continuously... Speak in Konkani!';
 
-    // Reset and start timer
     recSeconds = 0;
     updateTimer();
     clearInterval(recTimerInterval);
@@ -608,7 +544,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast('⏹️ Recording Stopped', 'info');
   }
 
-  // Single Record Button Toggle Listener
   if (btnToggleMic) {
     btnToggleMic.addEventListener('click', () => {
       if (!isRecording) {
@@ -619,9 +554,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // --- ACTION TOOLBAR LISTENERS ---
-
-  // Copy All Text
   if (btnCopyText) {
     btnCopyText.addEventListener('click', async () => {
       const fullText = accumulatedText.join('\n\n').trim();
@@ -638,7 +570,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Download .txt
   if (btnDownloadTxt) {
     btnDownloadTxt.addEventListener('click', () => {
       const fullText = accumulatedText.join('\n\n').trim();
@@ -657,7 +588,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Clear Transcript
   if (btnClearTranscript) {
     btnClearTranscript.addEventListener('click', () => {
       if (accumulatedText.length === 0) return;
@@ -678,7 +608,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // --- AUDIO FILE UPLOAD & TRANSCRIPTION ---
   let selectedAudioFile = null;
   let isTranscribingFile = false;
 
@@ -689,12 +618,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const sizeKb = (file.size / 1024).toFixed(1);
     if (previewFileName) previewFileName.textContent = `${file.name} (${sizeKb} KB)`;
 
-    // Set audio player source
     if (previewAudioPlayer) {
       previewAudioPlayer.src = URL.createObjectURL(file);
     }
 
-    // Toggle view
     if (dropZoneTrigger) dropZoneTrigger.style.display = 'none';
     if (uploadedFilePreview) uploadedFilePreview.style.display = 'flex';
 
@@ -727,7 +654,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Drag & drop handlers
   if (fileDropZone) {
     ['dragenter', 'dragover'].forEach(eventName => {
       fileDropZone.addEventListener(eventName, (e) => {
@@ -757,7 +683,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btnRemoveFile.addEventListener('click', resetFileUpload);
   }
 
-  // Transcribe Uploaded File
   if (btnTranscribeFile) {
     btnTranscribeFile.addEventListener('click', async () => {
       if (!selectedAudioFile || isTranscribingFile) return;
@@ -767,27 +692,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (transcribeBtnLabel) transcribeBtnLabel.textContent = 'Transcribing with Whisper...';
       showToast(`⏳ Transcribing ${selectedAudioFile.name}...`, 'info');
 
-      const formData = new FormData();
-      formData.append('audio', selectedAudioFile, selectedAudioFile.name);
-
       try {
-        const response = await fetch(WHISPER_API_URL, {
-          method: 'POST',
-          body: formData
-        });
+        const client = await getGradioClient();
+        const result = await client.predict('/transcribe', [handle_file(selectedAudioFile)]);
+        const data = result.data[0];
 
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.error || `HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
         if (data && data.text && data.text.trim().length > 0) {
           const transcribedText = data.text.trim();
           handleReceivedTranscription(transcribedText, selectedAudioFile.name);
           showToast(`✓ Successfully transcribed ${selectedAudioFile.name}!`, 'success');
 
-          // Save uploaded audio & transcript to Vault
           const fileRecord = {
             id: 'file_' + Date.now(),
             type: 'file',
@@ -815,10 +729,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
-  // ==========================================================================
-  // SPOKEN AUDIO & TRANSCRIPTION VAULT CONTROLLER (INDEXEDDB + DOWNLOADS)
-  // ==========================================================================
 
   const DB_NAME = 'KonkaniVoiceVaultDB';
   const DB_VERSION = 1;
@@ -955,7 +865,6 @@ document.addEventListener('DOMContentLoaded', () => {
       return titleMatch || textMatch || dateMatch;
     });
 
-    // Update Counter Badge
     if (vaultCountBadge) {
       vaultCountBadge.textContent = `${vaultRecordings.length} ${vaultRecordings.length === 1 ? 'RECORDING' : 'RECORDINGS'}`;
     }
@@ -963,7 +872,6 @@ document.addEventListener('DOMContentLoaded', () => {
       headerVaultBadge.textContent = vaultRecordings.length;
     }
 
-    // Update Summary Metrics
     if (vaultStatTotal) vaultStatTotal.textContent = vaultRecordings.length;
 
     const totalSeconds = vaultRecordings.reduce((sum, r) => sum + (r.durationSeconds || 0), 0);
@@ -975,7 +883,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 0);
     if (vaultStatWords) vaultStatWords.textContent = totalWords;
 
-    // Toggle Empty State vs Grid
     if (!vaultCardsGrid || !vaultEmptyState) return;
 
     if (filtered.length === 0) {
@@ -1028,12 +935,10 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
 
-          <!-- Audio Playback Deck -->
           <div class="vault-audio-box">
             <audio controls preload="metadata" class="vault-audio-player" src="${rec.audioUrl}"></audio>
           </div>
 
-          <!-- Spoken Konkani Text Display Box -->
           <div class="vault-speech-content">
             <div class="vault-speech-label">
               <span><i data-lucide="sparkles" style="width:12px; margin-right:4px;"></i> कोंकणी उलयिल्लें (Transcribed Speech)</span>
@@ -1049,7 +954,6 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>
 
-          <!-- Action Buttons Bar: Download Audio, Download Transcript, Copy, Delete -->
           <div class="vault-item-actions">
             <button class="btn-vault-action audio-dl" data-action="download-audio" data-id="${rec.id}" title="Download your voice recording (.webm)">
               <i data-lucide="download" style="width:13px;"></i>
@@ -1073,13 +977,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     vaultCardsGrid.innerHTML = cardsHtml;
 
-    // Refresh Lucide Icons
     if (window.lucide) {
       lucide.createIcons();
     }
   }
 
-  // --- DOWNLOAD AUDIO HANDLER ---
   function downloadVaultAudio(id) {
     const rec = vaultRecordings.find(r => r.id === id);
     if (!rec) return;
@@ -1103,7 +1005,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(`✓ Downloaded spoken audio: ${filename}`, 'success');
   }
 
-  // --- DOWNLOAD TRANSCRIPT HANDLER ---
   function downloadVaultTranscript(id) {
     const rec = vaultRecordings.find(r => r.id === id);
     if (!rec) return;
@@ -1140,7 +1041,6 @@ Generated by Konkani Voice AI Studio (Fine-Tuned Whisper Small LoRA)
     showToast(`✓ Downloaded Konkani transcript (.txt)`, 'success');
   }
 
-  // --- EXPORT ALL TRANSCRIPTS HANDLER ---
   function exportAllTranscripts() {
     if (vaultRecordings.length === 0) {
       showToast('No recordings in vault to export.', 'warning');
@@ -1178,7 +1078,6 @@ End of Konkani Voice AI Studio Export
     showToast(`✓ Exported all ${vaultRecordings.length} transcripts to .txt`, 'success');
   }
 
-  // --- COPY TEXT HANDLER ---
   async function copyVaultText(id) {
     const rec = vaultRecordings.find(r => r.id === id);
     if (!rec || !rec.transcription) {
@@ -1193,7 +1092,6 @@ End of Konkani Voice AI Studio Export
     }
   }
 
-  // --- DELETE RECORDING HANDLER ---
   async function deleteVaultItem(id) {
     const index = vaultRecordings.findIndex(r => r.id === id);
     if (index === -1) return;
@@ -1209,7 +1107,6 @@ End of Konkani Voice AI Studio Export
     showToast('🗑️ Recording removed from vault.', 'info');
   }
 
-  // --- CLEAR VAULT HANDLER ---
   async function clearEntireVault() {
     if (vaultRecordings.length === 0) return;
     if (!confirm('Are you sure you want to clear all spoken recordings from your vault? This cannot be undone.')) {
@@ -1228,7 +1125,6 @@ End of Konkani Voice AI Studio Export
     showToast('🗑️ Voice Vault cleared.', 'info');
   }
 
-  // --- VAULT EVENT LISTENERS ---
   if (vaultCardsGrid) {
     vaultCardsGrid.addEventListener('click', (e) => {
       const button = e.target.closest('[data-action]');
@@ -1275,7 +1171,6 @@ End of Konkani Voice AI Studio Export
     btnClearVault.addEventListener('click', clearEntireVault);
   }
 
-  // --- VAULT POP-UP MODAL CONTROLLERS ---
   function openVaultModal() {
     if (!vaultModalBackdrop) return;
     vaultModalBackdrop.style.display = 'flex';
@@ -1305,21 +1200,18 @@ End of Konkani Voice AI Studio Export
 
   if (vaultModalBackdrop) {
     vaultModalBackdrop.addEventListener('click', (e) => {
-      // Close only if backdrop itself was clicked, not modal content
       if (e.target === vaultModalBackdrop) {
         closeVaultModal();
       }
     });
   }
 
-  // Close modal on Escape key
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && vaultModalBackdrop && vaultModalBackdrop.style.display === 'flex') {
       closeVaultModal();
     }
   });
 
-  // Warm up ambient background noise monitoring on first user interaction
   async function initAmbientMic() {
     if (micStream) return;
     try {
@@ -1340,7 +1232,6 @@ End of Konkani Voice AI Studio Export
     document.removeEventListener('click', onUserClick);
   }, { once: true });
 
-  // Initialize Vault from IndexedDB on page startup
   loadVaultFromDB().then((saved) => {
     vaultRecordings = saved || [];
     renderVaultCards();
