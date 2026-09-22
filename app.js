@@ -3,7 +3,7 @@
  * Communicates with the Whisper Small LoRA Gradio backend hosted on Hugging Face Spaces
  * (sandeepsawant28/whisper-konkani-backend) via the official @gradio/client JS library.
  */
-import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.14.2/dist/index.min.js";
+import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@latest/dist/index.min.js";
 
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize Lucide Icons
