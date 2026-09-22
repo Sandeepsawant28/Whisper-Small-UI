@@ -329,7 +329,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const client = await getGradioClient();
-      const result = await client.predict('/transcribe', [handle_file(blob)]);
+     const result = await client.predict('/transcribe', { audio_file: handle_file(blob) });
       const data = result.data[0];
 
       if (data && data.text && data.text.trim().length > 0) {
@@ -694,7 +694,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       try {
         const client = await getGradioClient();
-        const result = await client.predict('/transcribe', [handle_file(selectedAudioFile)]);
+        const result = await client.predict('/transcribe', { audio_file: handle_file(selectedAudioFile) });
         const data = result.data[0];
 
         if (data && data.text && data.text.trim().length > 0) {
