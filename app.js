@@ -2,7 +2,7 @@
  * Konkani Voice AI Studio - Frontend Controller
  * Communicates with Whisper Small LoRA server at http://localhost:5000/transcribe
  */
-
+   import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.14.2/dist/index.min.js";
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize Lucide Icons
   if (window.lucide) {
