@@ -6,5 +6,5 @@ pydub==0.25.1
 torch
 transformers==5.15.0
 peft==0.20.0
-librosa==1.0.0
+librosa
 huggingface_hub==1.26.0
