@@ -699,12 +699,12 @@ body {
 }
 
 .noise-marker.warning {
-  left: 50%;
+  left: 65%;
   background: rgba(245, 158, 11, 0.5);
 }
 
 .noise-marker.danger {
-  left: 75%;
+  left: 85%;
   background: rgba(244, 63, 94, 0.6);
 }
 
