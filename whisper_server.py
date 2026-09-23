@@ -7,16 +7,18 @@ import os
 import gc
 import tempfile
 import traceback
+import threading
+import subprocess
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from pydub import AudioSegment
 from faster_whisper import WhisperModel
 from huggingface_hub import snapshot_download
 
 HF_REPO_ID = "sandeepsawant28/whisper-small-konkani-numbers"
 
 model = None
+transcribe_lock = threading.Lock()  # prevents overlapping requests from stacking memory
 
 try:
     print(f"Downloading/locating model files for {HF_REPO_ID}...")
@@ -36,67 +38,91 @@ app = Flask(__name__)
 CORS(app)
 
 
+def convert_to_wav(webm_path, wav_path):
+    """Direct ffmpeg subprocess call — avoids pydub's in-Python memory copy."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", webm_path,
+            "-ar", "16000", "-ac", "1",
+            "-f", "wav", wav_path
+        ],
+        capture_output=True,
+        timeout=15
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.decode(errors="ignore"))
+
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
-    if 'audio' not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
+    with transcribe_lock:  # serialize requests so memory never stacks
+        if 'audio' not in request.files:
+            return jsonify({"error": "No audio file provided"}), 400
 
-    audio_file = request.files['audio']
+        audio_file = request.files['audio']
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_webm:
-        audio_file.save(temp_webm.name)
-        webm_path = temp_webm.name
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_webm:
+            audio_file.save(temp_webm.name)
+            webm_path = temp_webm.name
 
-    wav_path = webm_path.replace(".webm", ".wav")
-
-    try:
-        if os.path.getsize(webm_path) < 600:
-            return jsonify({"status": "empty", "text": "", "language": "Konkani (kok)"})
+        wav_path = webm_path.replace(".webm", ".wav")
+        segments, info = None, None
 
         try:
-            audio = AudioSegment.from_file(webm_path)
-            audio = audio.set_frame_rate(16000).set_channels(1)
-            audio.export(wav_path, format="wav")
-            del audio  # free the in-memory AudioSegment as soon as we're done with it
-        except Exception as ffmpeg_err:
-            return jsonify({
-                "status": "warning",
-                "text": "",
-                "warning": f"Audio decoding failed: {ffmpeg_err}"
-            }), 200
+            if os.path.getsize(webm_path) < 600:
+                return jsonify({"status": "empty", "text": "", "language": "Konkani (kok)"})
 
-        if model is None:
+            try:
+                convert_to_wav(webm_path, wav_path)
+            except Exception as ffmpeg_err:
+                return jsonify({
+                    "status": "warning",
+                    "text": "",
+                    "warning": f"Audio decoding failed: {ffmpeg_err}"
+                }), 200
+
+            if model is None:
+                return jsonify({
+                    "status": "warning",
+                    "is_mock": True,
+                    "error": "Model not loaded on server.",
+                    "language": "Konkani (kok)"
+                }), 503
+
+            segments, info = model.transcribe(
+                wav_path,
+                language="mr",   # Marathi as closest MMS/Whisper substitute for Konkani
+                beam_size=1,      # default is 5 — beam search multiplies memory/compute
+                best_of=1,
+                vad_filter=False,
+            )
+            text = " ".join([seg.text for seg in segments]).strip()
+
+            if not text:
+                return jsonify({"status": "empty", "text": "", "language": "Konkani (kok)"})
+
             return jsonify({
-                "status": "warning",
-                "is_mock": True,
-                "error": "Model not loaded on server.",
+                "status": "success",
+                "is_mock": False,
+                "text": text,
                 "language": "Konkani (kok)"
-            }), 503
+            })
 
-        segments, info = model.transcribe(wav_path, language="mr")  # Marathi as closest MMS/Whisper substitute for Konkani
-        text = " ".join([seg.text for seg in segments]).strip()
-
-        if not text:
-            return jsonify({"status": "empty", "text": "", "language": "Konkani (kok)"})
-
-        return jsonify({
-            "status": "success",
-            "is_mock": False,
-            "text": text,
-            "language": "Konkani (kok)"
-        })
-
-    except Exception as err:
-        traceback.print_exc()
-        return jsonify({"error": str(err)}), 500
-    finally:
-        for p in (webm_path, wav_path):
-            if os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
-        gc.collect()  # free memory back to the OS after each request
+        except Exception as err:
+            traceback.print_exc()
+            return jsonify({"error": str(err)}), 500
+        finally:
+            for p in (webm_path, wav_path):
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            try:
+                del segments, info
+            except NameError:
+                pass
+            gc.collect()  # free memory back to the OS after each request
 
 
 @app.route('/health', methods=['GET'])
