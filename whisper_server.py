@@ -18,7 +18,7 @@ from huggingface_hub import snapshot_download
 HF_REPO_ID = "sandeepsawant28/whisper-small-konkani-numbers"
 
 model = None
-transcribe_lock = threading.Lock()  # prevents overlapping requests from stacking memory
+transcribe_lock = threading.Lock()
 
 try:
     print(f"Downloading/locating model files for {HF_REPO_ID}...")
@@ -26,8 +26,7 @@ try:
     ct2_path = os.path.join(local_path, "ct2")
 
     print(f"Loading CTranslate2 int8 model from {ct2_path}...")
-    # cpu_threads=1 keeps memory usage low and predictable on RAM-constrained hosts
-   model = WhisperModel(ct2_path, device="cpu", compute_type="int8", cpu_threads=1)
+    model = WhisperModel(ct2_path, device="cpu", compute_type="int8", cpu_threads=1)
     print("[OK] Model loaded successfully on CPU (int8).")
 except Exception as e:
     print(f"Notice: Model load failed ({e}).")
@@ -39,7 +38,6 @@ CORS(app)
 
 
 def convert_to_wav(webm_path, wav_path):
-    """Direct ffmpeg subprocess call — avoids pydub's in-Python memory copy."""
     result = subprocess.run(
         [
             "ffmpeg", "-y", "-i", webm_path,
@@ -55,7 +53,7 @@ def convert_to_wav(webm_path, wav_path):
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
-    with transcribe_lock:  # serialize requests so memory never stacks
+    with transcribe_lock:
         if 'audio' not in request.files:
             return jsonify({"error": "No audio file provided"}), 400
 
@@ -91,8 +89,8 @@ def transcribe_audio():
 
             segments, info = model.transcribe(
                 wav_path,
-                language="mr",   # Marathi as closest MMS/Whisper substitute for Konkani
-                beam_size=1,      # default is 5 — beam search multiplies memory/compute
+                language="mr",
+                beam_size=1,
                 best_of=1,
                 vad_filter=False,
             )
@@ -122,7 +120,7 @@ def transcribe_audio():
                 del segments, info
             except NameError:
                 pass
-            gc.collect()  # free memory back to the OS after each request
+            gc.collect()
 
 
 @app.route('/health', methods=['GET'])
