@@ -27,7 +27,7 @@ try:
 
     print(f"Loading CTranslate2 int8 model from {ct2_path}...")
     # cpu_threads=1 keeps memory usage low and predictable on RAM-constrained hosts
-    model = WhisperModel(ct2_path, device="cpu", compute_type="int8", cpu_threads=2)
+   model = WhisperModel(ct2_path, device="cpu", compute_type="int8", cpu_threads=1)
     print("[OK] Model loaded successfully on CPU (int8).")
 except Exception as e:
     print(f"Notice: Model load failed ({e}).")
