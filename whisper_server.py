@@ -3,15 +3,13 @@ Whisper Small Konkani Model Server
 Serves the fine-tuned Konkani Whisper model (LoRA adapter on openai/whisper-small)
 for real-time speech transcription via HTTP POST /transcribe.
 
-Loads the adapter repo directly (sandeepsawant28/whisper-small-konkani) instead of
-the merged repo, matching the exact loading path used in the evaluation notebook
-that was already confirmed to work well.
+Plain Flask + PyTorch, CPU-only. No ZeroGPU, no Gradio, no quota concerns.
+Designed for deployment on Render.com (or any plain Docker host).
 """
 import os
 os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '60'
 os.environ['HF_HUB_ETAG_TIMEOUT'] = '30'
 
-import os
 import gc
 import tempfile
 import traceback
@@ -25,26 +23,22 @@ from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from peft import PeftModel
 
 BASE_MODEL_ID = "openai/whisper-small"
-ADAPTER_ID = "sandeepsawant28/whisper-small-konkani"  # LoRA adapter repo (verified public model card)
+ADAPTER_ID = "sandeepsawant28/whisper-small-konkani-v2"  # v2 LoRA adapter repo
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Use float16 on CPU to cut memory usage roughly in half (needed for low-RAM hosting).
-MODEL_DTYPE = torch.float16
+device = "cpu"  # Render's free tier is CPU-only — this is intentional, not a fallback
 
 model = None
 processor = None
 
 try:
-    print(f"Loading Konkani Whisper Small model (LoRA adapter) on {device}...")
+    print(f"Loading Konkani Whisper Small model (LoRA adapter v2) on {device}...")
     processor = WhisperProcessor.from_pretrained(ADAPTER_ID)
     base_model = WhisperForConditionalGeneration.from_pretrained(
         BASE_MODEL_ID,
-        torch_dtype=MODEL_DTYPE,
+        torch_dtype=torch.float32,
         low_cpu_mem_usage=True
     )
     model = PeftModel.from_pretrained(base_model, ADAPTER_ID).to(device)
-    model = model.half()  # ensure LoRA adapter weights are also float16
     model.eval()
 
     gc.collect()
@@ -63,8 +57,8 @@ def transcribe_audio():
     """
     Receives audio file from UI (webm/wav/mp3), transcribes using the
     Konkani Whisper LoRA model. Whisper has no native Konkani ('kok') language
-    token, so 'marathi' is used as the closest supported substitute — matching
-    how the model was fine-tuned. The output text itself is genuine Konkani.
+    token, so 'mr' (Marathi) is used as the closest supported substitute — matching
+    the v2 model card. The output text itself is genuine Konkani.
     """
     if 'audio' not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
@@ -78,7 +72,6 @@ def transcribe_audio():
     wav_path = webm_path.replace(".webm", ".wav")
 
     try:
-        # Ignore empty or tiny audio fragments (< 600 bytes)
         if os.path.getsize(webm_path) < 600:
             return jsonify({
                 "status": "empty",
@@ -86,8 +79,6 @@ def transcribe_audio():
                 "language": "Konkani (kok)"
             })
 
-        # Explicitly convert webm -> wav via ffmpeg (through pydub) before transcribing.
-        # Whisper expects 16kHz mono input.
         try:
             audio = AudioSegment.from_file(webm_path)
             audio = audio.set_frame_rate(16000).set_channels(1)
@@ -110,7 +101,7 @@ def transcribe_audio():
 
         import librosa
         audio_input, sr = librosa.load(wav_path, sr=16000)
-        if len(audio_input) < 1600:  # Less than 0.1s of audio
+        if len(audio_input) < 1600:
             return jsonify({
                 "status": "empty",
                 "text": "",
@@ -119,13 +110,14 @@ def transcribe_audio():
 
         input_features = processor(
             audio_input, sampling_rate=16000, return_tensors="pt"
-        ).input_features.to(device, dtype=MODEL_DTYPE)
+        ).input_features.to(device, dtype=torch.float32)
 
         with torch.no_grad():
             predicted_ids = model.generate(
                 input_features,
-                language="marathi",  # closest supported substitute for Konkani
-                task="transcribe"
+                language="mr",  # closest supported substitute for Konkani (matches v2 card)
+                task="transcribe",
+                max_new_tokens=128
             )
 
         text = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
@@ -153,8 +145,9 @@ def transcribe_audio():
 def health():
     return jsonify({
         "status": "online" if model is not None else "model_not_loaded",
-        "model": "Whisper Small Konkani (LoRA adapter)",
-        "backend": "PyTorch / Transformers / PEFT"
+        "model": "Whisper Small Konkani v2 (LoRA adapter)",
+        "backend": "PyTorch / Transformers / PEFT",
+        "hardware": "CPU"
     })
 
 
