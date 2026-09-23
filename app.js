@@ -1,9 +1,7 @@
 /**
  * Konkani Voice AI Studio - Frontend Controller
- * Communicates with the Whisper Small LoRA Gradio backend hosted on Hugging Face Spaces
- * (sandeepsawant28/whisper-konkani-backend) via the official @gradio/client JS library.
+ * Communicates with the Whisper Small (CTranslate2) Flask backend hosted on Render.
  */
-import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@latest/dist/index.min.js";
 
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize Lucide Icons
@@ -11,17 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // --- GRADIO BACKEND CLIENT ---
-  const HF_SPACE_ID = "sandeepsawant28/whisper-konkani-backend";
+  // --- BACKEND CONFIG ---
+  const BACKEND_URL = "https://whisper-small-ui-1.onrender.com";
   const CHUNK_INTERVAL_MS = 4000; // Slice audio every 4 seconds for continuous live transcription
-
-  let gradioClientPromise = null;
-  function getGradioClient() {
-    if (!gradioClientPromise) {
-      gradioClientPromise = Client.connect(HF_SPACE_ID);
-    }
-    return gradioClientPromise;
-  }
 
   // DOM Elements
   const btnToggleMic = document.getElementById('btn-toggle-mic');
@@ -127,26 +117,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3500);
   }
 
+  // --- HEALTH CHECK PING (via Flask /health) ---
   async function checkServerHealth() {
     if (serverStatusText) serverStatusText.textContent = 'Checking Model...';
     try {
-      const client = await getGradioClient();
-      const result = await client.predict('/check_health', []);
-      const data = result.data[0];
+      const res = await fetch(`${BACKEND_URL}/health`);
+      const data = await res.json();
 
       if (data && data.status === 'online') {
         serverStatusPill.className = 'status-pill';
-        serverStatusText.textContent = `Whisper Online (${data.model || 'Konkani LoRA'})`;
+        serverStatusText.textContent = `Whisper Online (${data.model || 'Konkani Whisper'})`;
         showToast('✓ Konkani Whisper Model Connected & Ready', 'success');
       } else {
         serverStatusPill.className = 'status-pill warning';
-        serverStatusText.textContent = 'Model Loading on Space...';
-        showToast('Space online, model still loading weights.', 'warning');
+        serverStatusText.textContent = 'Model Loading...';
+        showToast('Server online, model still loading weights.', 'warning');
       }
     } catch (err) {
       serverStatusPill.className = 'status-pill offline';
-      serverStatusText.textContent = 'Whisper Space Unreachable';
-      showToast('⚠️ Could not reach the Hugging Face Space. It may be waking up — try again shortly.', 'error');
+      serverStatusText.textContent = 'Backend Unreachable';
+      showToast('⚠️ Could not reach the backend. It may be waking up — try again shortly.', 'error');
       console.error('Health check error:', err);
     }
   }
@@ -324,13 +314,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultLiveTimer) vaultLiveTimer.textContent = timeStr;
   }
 
+  // --- SEND AUDIO CHUNK TO WHISPER BACKEND (via Flask /transcribe) ---
   async function sendAudioChunkToWhisper(blob, sessionId = null) {
     if (!blob || blob.size === 0) return;
 
     try {
-      const client = await getGradioClient();
-     const result = await client.predict('/transcribe', { audio_file: handle_file(blob) });
-      const data = result.data[0];
+      const formData = new FormData();
+      formData.append('audio', blob, 'chunk.webm');
+
+      const res = await fetch(`${BACKEND_URL}/transcribe`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
 
       if (data && data.text && data.text.trim().length > 0) {
         const trimmed = data.text.trim();
@@ -683,6 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
     btnRemoveFile.addEventListener('click', resetFileUpload);
   }
 
+  // Transcribe Uploaded File (via Flask /transcribe)
   if (btnTranscribeFile) {
     btnTranscribeFile.addEventListener('click', async () => {
       if (!selectedAudioFile || isTranscribingFile) return;
@@ -693,9 +690,14 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(`⏳ Transcribing ${selectedAudioFile.name}...`, 'info');
 
       try {
-        const client = await getGradioClient();
-        const result = await client.predict('/transcribe', { audio_file: handle_file(selectedAudioFile) });
-        const data = result.data[0];
+        const formData = new FormData();
+        formData.append('audio', selectedAudioFile, selectedAudioFile.name);
+
+        const res = await fetch(`${BACKEND_URL}/transcribe`, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await res.json();
 
         if (data && data.text && data.text.trim().length > 0) {
           const transcribedText = data.text.trim();
@@ -1022,7 +1024,7 @@ TRANSCRIPTION (कोंकणी - Devanagari):
 =====================================================
 ${rec.transcription ? rec.transcription : '(No Konkani text was transcribed for this session)'}
 =====================================================
-Generated by Konkani Voice AI Studio (Fine-Tuned Whisper Small LoRA)
+Generated by Konkani Voice AI Studio (Fine-Tuned Whisper Small)
 `;
 
     const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
