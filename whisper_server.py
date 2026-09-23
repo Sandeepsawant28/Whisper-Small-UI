@@ -4,6 +4,7 @@ Serves the quantized model via faster-whisper for fast CPU inference.
 HTTP POST /transcribe — same API contract as the earlier Flask server.
 """
 import os
+import gc
 import tempfile
 import traceback
 
@@ -23,7 +24,8 @@ try:
     ct2_path = os.path.join(local_path, "ct2")
 
     print(f"Loading CTranslate2 int8 model from {ct2_path}...")
-    model = WhisperModel(ct2_path, device="cpu", compute_type="int8")
+    # cpu_threads=1 keeps memory usage low and predictable on RAM-constrained hosts
+    model = WhisperModel(ct2_path, device="cpu", compute_type="int8", cpu_threads=1)
     print("[OK] Model loaded successfully on CPU (int8).")
 except Exception as e:
     print(f"Notice: Model load failed ({e}).")
@@ -55,6 +57,7 @@ def transcribe_audio():
             audio = AudioSegment.from_file(webm_path)
             audio = audio.set_frame_rate(16000).set_channels(1)
             audio.export(wav_path, format="wav")
+            del audio  # free the in-memory AudioSegment as soon as we're done with it
         except Exception as ffmpeg_err:
             return jsonify({
                 "status": "warning",
@@ -93,6 +96,7 @@ def transcribe_audio():
                     os.remove(p)
                 except Exception:
                     pass
+        gc.collect()  # free memory back to the OS after each request
 
 
 @app.route('/health', methods=['GET'])
