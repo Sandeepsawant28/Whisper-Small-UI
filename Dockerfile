@@ -9,6 +9,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download the model at BUILD time, not runtime
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('sandeepsawant28/whisper-small-konkani-numbers')"
+
 COPY whisper_server.py .
 
 EXPOSE 5000
