@@ -314,39 +314,47 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultLiveTimer) vaultLiveTimer.textContent = timeStr;
   }
 
-  // --- SEND AUDIO CHUNK TO WHISPER BACKEND (via Flask /transcribe) ---
-  async function sendAudioChunkToWhisper(blob, sessionId = null) {
-    if (!blob || blob.size === 0) return;
+ let isSendingChunk = false; // add this near your other state variables at the top
 
-    try {
-      const formData = new FormData();
-      formData.append('audio', blob, 'chunk.webm');
+async function sendAudioChunkToWhisper(blob, sessionId = null) {
+  if (!blob || blob.size === 0) return;
+  if (isSendingChunk) {
+    console.log('Skipping chunk — previous request still in flight.');
+    return; // drop this chunk rather than overlapping requests
+  }
 
-      const res = await fetch(`${BACKEND_URL}/transcribe`, {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
+  isSendingChunk = true;
+  try {
+    const formData = new FormData();
+    formData.append('audio', blob, 'chunk.webm');
 
-      if (data && data.text && data.text.trim().length > 0) {
-        const trimmed = data.text.trim();
-        handleReceivedTranscription(trimmed);
+    const res = await fetch(`${BACKEND_URL}/transcribe`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
 
-        if (sessionId) {
-          currentSessionTexts.push(trimmed);
-          const existingItem = vaultRecordings.find(r => r.id === sessionId);
-          if (existingItem) {
-            existingItem.transcription = currentSessionTexts.join(' ').trim();
-            saveVaultItemToDB(existingItem);
-            renderVaultCards(vaultSearchInput ? vaultSearchInput.value : '');
-          }
+    if (data && data.text && data.text.trim().length > 0) {
+      const trimmed = data.text.trim();
+      handleReceivedTranscription(trimmed);
+
+      if (sessionId) {
+        currentSessionTexts.push(trimmed);
+        const existingItem = vaultRecordings.find(r => r.id === sessionId);
+        if (existingItem) {
+          existingItem.transcription = currentSessionTexts.join(' ').trim();
+          saveVaultItemToDB(existingItem);
+          renderVaultCards(vaultSearchInput ? vaultSearchInput.value : '');
         }
       }
-    } catch (err) {
-      console.warn('Transcription request error:', err);
-      showToast(`Transcription warning: ${err.message}`, 'error');
     }
+  } catch (err) {
+    console.warn('Transcription request error:', err);
+    showToast(`Transcription warning: ${err.message}`, 'error');
+  } finally {
+    isSendingChunk = false;
   }
+}
 
   function handleReceivedTranscription(konkaniSentence, sourceLabel = null) {
     if (!konkaniSentence || konkaniSentence.trim().length === 0) return;
