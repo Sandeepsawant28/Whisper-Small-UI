@@ -367,6 +367,10 @@
   </div>
 
   <!-- Application Logic -->
-  <script src="app.js"></script>
+  <script type="module">
+  import { Client } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+  window.GradioClient = Client;
+</script>
+<script src="app.js" defer></script>
 </body>
 </html>
