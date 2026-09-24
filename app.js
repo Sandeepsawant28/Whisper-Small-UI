@@ -1,6 +1,6 @@
 /**
  * Konkani Voice AI Studio - Frontend Controller
- * Communicates with the Whisper Small (CTranslate2) Flask backend hosted on Render.
+ * Communicates with the Whisper Small (LoRA) Gradio backend hosted on Hugging Face Spaces.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -10,8 +10,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- BACKEND CONFIG ---
-  const BACKEND_URL = "https://whisper-small-ui-1.onrender.com";
+  const SPACE_ID = "sandeepsawant28/whisper-konkani-backend";
   const CHUNK_INTERVAL_MS = 4000; // Slice audio every 4 seconds for continuous live transcription
+
+  let gradioClientPromise = null;
+  function getGradioClient() {
+    if (!gradioClientPromise) {
+      gradioClientPromise = import("https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js")
+        .then(({ Client }) => Client.connect(SPACE_ID));
+    }
+    return gradioClientPromise;
+  }
 
   // DOM Elements
   const btnToggleMic = document.getElementById('btn-toggle-mic');
@@ -117,12 +126,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3500);
   }
 
-  // --- HEALTH CHECK PING (via Flask /health) ---
+  // --- HEALTH CHECK PING (via Gradio /check_health) ---
   async function checkServerHealth() {
     if (serverStatusText) serverStatusText.textContent = 'Checking Model...';
     try {
-      const res = await fetch(`${BACKEND_URL}/health`);
-      const data = await res.json();
+      const client = await getGradioClient();
+      const result = await client.predict("/check_health", {});
+      const data = result.data[0];
 
       if (data && data.status === 'online') {
         serverStatusPill.className = 'status-pill';
@@ -314,47 +324,42 @@ document.addEventListener('DOMContentLoaded', () => {
     if (vaultLiveTimer) vaultLiveTimer.textContent = timeStr;
   }
 
- let isSendingChunk = false; // add this near your other state variables at the top
+  let isSendingChunk = false;
 
-async function sendAudioChunkToWhisper(blob, sessionId = null) {
-  if (!blob || blob.size === 0) return;
-  if (isSendingChunk) {
-    console.log('Skipping chunk — previous request still in flight.');
-    return; // drop this chunk rather than overlapping requests
-  }
+  async function sendAudioChunkToWhisper(blob, sessionId = null) {
+    if (!blob || blob.size === 0) return;
+    if (isSendingChunk) {
+      console.log('Skipping chunk — previous request still in flight.');
+      return; // drop this chunk rather than overlapping requests
+    }
 
-  isSendingChunk = true;
-  try {
-    const formData = new FormData();
-    formData.append('audio', blob, 'chunk.webm');
+    isSendingChunk = true;
+    try {
+      const client = await getGradioClient();
+      const result = await client.predict("/transcribe", { audio_file: blob });
+      const data = result.data[0];
 
-    const res = await fetch(`${BACKEND_URL}/transcribe`, {
-      method: 'POST',
-      body: formData
-    });
-    const data = await res.json();
+      if (data && data.text && data.text.trim().length > 0) {
+        const trimmed = data.text.trim();
+        handleReceivedTranscription(trimmed);
 
-    if (data && data.text && data.text.trim().length > 0) {
-      const trimmed = data.text.trim();
-      handleReceivedTranscription(trimmed);
-
-      if (sessionId) {
-        currentSessionTexts.push(trimmed);
-        const existingItem = vaultRecordings.find(r => r.id === sessionId);
-        if (existingItem) {
-          existingItem.transcription = currentSessionTexts.join(' ').trim();
-          saveVaultItemToDB(existingItem);
-          renderVaultCards(vaultSearchInput ? vaultSearchInput.value : '');
+        if (sessionId) {
+          currentSessionTexts.push(trimmed);
+          const existingItem = vaultRecordings.find(r => r.id === sessionId);
+          if (existingItem) {
+            existingItem.transcription = currentSessionTexts.join(' ').trim();
+            saveVaultItemToDB(existingItem);
+            renderVaultCards(vaultSearchInput ? vaultSearchInput.value : '');
+          }
         }
       }
+    } catch (err) {
+      console.warn('Transcription request error:', err);
+      showToast(`Transcription warning: ${err.message}`, 'error');
+    } finally {
+      isSendingChunk = false;
     }
-  } catch (err) {
-    console.warn('Transcription request error:', err);
-    showToast(`Transcription warning: ${err.message}`, 'error');
-  } finally {
-    isSendingChunk = false;
   }
-}
 
   function handleReceivedTranscription(konkaniSentence, sourceLabel = null) {
     if (!konkaniSentence || konkaniSentence.trim().length === 0) return;
@@ -687,7 +692,7 @@ async function sendAudioChunkToWhisper(blob, sessionId = null) {
     btnRemoveFile.addEventListener('click', resetFileUpload);
   }
 
-  // Transcribe Uploaded File (via Flask /transcribe)
+  // Transcribe Uploaded File (via Gradio /transcribe)
   if (btnTranscribeFile) {
     btnTranscribeFile.addEventListener('click', async () => {
       if (!selectedAudioFile || isTranscribingFile) return;
@@ -698,14 +703,9 @@ async function sendAudioChunkToWhisper(blob, sessionId = null) {
       showToast(`⏳ Transcribing ${selectedAudioFile.name}...`, 'info');
 
       try {
-        const formData = new FormData();
-        formData.append('audio', selectedAudioFile, selectedAudioFile.name);
-
-        const res = await fetch(`${BACKEND_URL}/transcribe`, {
-          method: 'POST',
-          body: formData
-        });
-        const data = await res.json();
+        const client = await getGradioClient();
+        const result = await client.predict("/transcribe", { audio_file: selectedAudioFile });
+        const data = result.data[0];
 
         if (data && data.text && data.text.trim().length > 0) {
           const transcribedText = data.text.trim();
